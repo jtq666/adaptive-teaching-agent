@@ -37,7 +37,7 @@ function Copy-CleanTree([string]$relativeSource) {
         }
 }
 
-foreach ($directory in @("src", "app_pages", "config", "data", "scripts", "tests", ".github", ".streamlit")) {
+foreach ($directory in @("src", "app_pages", "config", "data", "scripts", "tests", "docs", ".github", ".streamlit")) {
     Copy-CleanTree $directory
 }
 
