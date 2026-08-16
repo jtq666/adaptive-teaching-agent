@@ -20,3 +20,7 @@ output/sessions/.trash/
 .streamlit/secrets.toml
 archive/
 release/
+
+# 本地面试材料，不上传 GitHub
+项目演示流程文档.md
+面试题文档.md
