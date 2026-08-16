@@ -1,0 +1,37 @@
+agent:
+  # Keep the live teaching loop small and predictable: one route step, one
+  # optional follow-up, then a new step or transfer check.
+  simple_teaching_mode: true
+  max_rounds: 8
+  mastery_threshold: 0.80
+  point_mastery_threshold: 0.70
+  no_progress_limit: 3
+  scaffold_after_rounds: 2
+  correction_after_rounds: 3
+  temperature: 0.20
+  evaluation_seed: 20260809
+  candidate_limit: 5
+  semantic_selector_margin: 0.05
+  verify_teacher_output: true
+  mastery_evidence_targets:
+    partial: 0.50
+    correct: 0.68
+    explained: 0.82
+    transfer: 0.92
+  mastery_repeat_novelty: 0.35
+  max_repair_reviews: 1
+  max_state_reviews: 2
+  state_review_call_budget: 2
+  mastery_regression_delta: -0.06
+  mastery_repeat_decay: 0.55
+llm:
+  max_tokens: 1800
+  timeout_seconds: 25
+  retries: 1
+  turn_timeout_seconds: 45
+paths:
+  skills: data/skills
+  skill_custom: data/skills_custom
+  cases: data/evaluation_cases.json
+  sessions: output/sessions
+  evaluations: output/evaluations

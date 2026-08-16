@@ -1,0 +1,41 @@
+skill_id: transfer_verification_v1
+name: 新情境迁移与终止验证
+version: '1.0'
+skill_type: transfer
+added_reason: 原始 Skill 的 verification 各自独立，第二题需要统一的跨 Skill 成功判定和终止依据。
+applicable_when:
+- 目标知识点掌握度接近或达到阈值
+- 需要判断学生是真正理解还是只记住当前例题
+trigger:
+- 学生已能解释当前例题的关键关系
+- Agent 准备判断教学成功并终止
+preconditions:
+- 已完成至少一轮讲解或纠错
+- 状态模型记录了明确的理解信号
+goal:
+- 验证学生能否把核心原则迁移到表面不同的新任务
+- 为成功终止提供可复现证据
+procedure:
+- 保持核心关系不变，替换情境、数值或表达方式
+- 要求学生先说明适用原则，再执行解答
+- 追问新题与原题的相同结构和不同表面特征
+- 根据独立解释与结果决定成功或继续教学
+teacher_actions:
+- ask
+- check_understanding
+- connect
+- summarize
+student_signals:
+- 学生不依赖原例题措辞选择正确原则
+- 学生能说明迁移依据并完成新任务
+failure_modes:
+- 迁移题与原题完全相同，只测到记忆
+- 只检查最终答案，没有检查推理依据
+verification:
+- 一道改变表面情境的迁移题
+- 要求学生比较新旧任务的结构
+bloom_category: 应用
+teaching_strategies:
+- 总结与迁移
+- 难度递进
+- 提问与等待

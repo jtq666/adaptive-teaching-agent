@@ -1,0 +1,56 @@
+skill_id: transition_from_newton_to_momentum_v1
+name: 从牛顿第三定律到动量守恒定律的教学
+version: '1.0'
+bloom_category: 分析
+trigger:
+- 当学生已经掌握牛顿第三定律，但需要进一步理解其局限性并引入动量守恒定律时
+- 当遇到远距离相互作用问题，牛顿第三定律的即时性矛盾凸显时
+- 当需要强调动量守恒定律的普适性和更根本的地位时
+preconditions:
+- 学生已经了解牛顿第三定律的基本内容及相互作用概念
+- 学生具备基本的力和运动学知识
+- 学生对动量有初步认识
+goal:
+- 理解牛顿第三定律在远距离相互作用中的局限性及失效原因
+- 理解动量守恒定律是空间均匀性的必然结果，比牛顿第三定律更基本
+- 认识到应用动量守恒定律分析相互作用问题更可靠、更普遍
+procedure:
+- 回顾牛顿第三定律的基本内容和应用条件
+- 提出远距离相互作用的矛盾情境，如地球与月球之间的万有引力传递需要时间
+- 引用爱因斯坦与居里夫人的登山故事，直观说明信号延迟带来的问题
+- 引入空间均匀性（平移对称性）概念，逻辑推导动量守恒定律的必然性
+- 总结动量守恒定律的普遍适用性，并与牛顿第三定律对比，强调其更基本
+teacher_actions:
+- explain
+- contrast
+- scaffold
+- summarize
+student_signals:
+- 学生能够复述牛顿第三定律在远距离相互作用中的局限性
+- 学生能够解释为何动量守恒定律比牛顿第三定律更基本
+- 学生能够举出利用动量守恒定律分析远距离相互作用的例子
+failure_modes:
+- 情境例子（地球和月球）距离过于遥远抽象，学生难以建立直观认知
+- 缺乏严格的数学推导，学生可能无法从逻辑上完全接受动量守恒的必然性
+- 学生前置知识不足（如对万有引力、光速不变等概念不熟悉），导致理解障碍
+verification:
+- 提问学生关于牛顿第三定律局限性的核心矛盾，检查其理解程度
+- 让学生尝试解释动量守恒定律与空间均匀性的关系
+- 给出一个具体的远距离相互作用情境，要求学生用动量守恒定律进行分析
+source_video: 牛顿第三定律与动量守恒定律.mp4
+source_course: 大学物理
+source_timestamp: 整节
+teaching_strategies:
+- 类比或具体例子（地球-月球系统、爱因斯坦爬山故事）
+- 对比学习（比较牛顿第三定律与动量守恒定律的适用范围）
+- 先直觉后形式化（先用故事建立直觉，再引入空间均匀性抽象概念）
+- 逐步拆解（逐步分析信号延迟、对称性、动量守恒的推导过程）
+courses: [大学物理]
+# “牛顿第三定律” is a prerequisite discussed in the procedure, not the
+# distinguishing target of this Skill. Keeping only target anchors here
+# prevents a general third-law lesson from being routed into the transition
+# lesson before momentum is part of the learner's goal.
+topic_tags: [动量守恒, 远距离相互作用, 空间均匀性, 平移对称性]
+required_topic_tags: [牛顿第三定律, 动量守恒]
+trigger_states: [initial, followup, confusion, misconception]
+required_prior_knowledge: [牛顿第三定律, 动量, 力]

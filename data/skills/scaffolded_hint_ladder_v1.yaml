@@ -1,0 +1,41 @@
+skill_id: scaffolded_hint_ladder_v1
+name: 不直接给答案的分层提示
+version: '1.0'
+skill_type: scaffold
+added_reason: 原始 Skill 缺少学生首次受阻后逐层降低难度、同时保留思考空间的通用补救流程。
+applicable_when:
+- 学生已尝试但无法独立推进
+- 直接重复原讲解没有形成新的理解信号
+trigger:
+- 学生一轮未取得进展，但尚未形成稳定误解
+- 学生需要比完整答案更小的认知台阶
+preconditions:
+- 已定位当前卡点
+- 教师能够把任务拆成可独立完成的小步骤
+goal:
+- 用最少提示帮助学生完成下一步推理
+- 保持学生作为解题主体，避免直接给出结论
+procedure:
+- 先复述学生已做对的部分
+- 只提示下一步需要关注的变量、条件或关系
+- 等待学生作答后再决定是否增加第二层提示
+- 学生推进后立即撤去提示并要求解释依据
+teacher_actions:
+- scaffold
+- prompt
+- motivate
+- check_understanding
+student_signals:
+- 学生利用提示完成下一步，而非复述教师答案
+- 学生能够说明提示与目标之间的关系
+failure_modes:
+- 第一层提示已经包含完整解法
+- 提示层级跳跃过大，学生仍不知道从哪里开始
+verification:
+- 撤去提示后让学生独立完成一个同结构步骤
+- 让学生解释刚才提示为什么有效
+bloom_category: 应用
+teaching_strategies:
+- 逐步拆解
+- 练习—反馈—再练习
+- 根据学生反应动态调整

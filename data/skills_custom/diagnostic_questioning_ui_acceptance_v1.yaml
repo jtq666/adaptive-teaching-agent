@@ -1,0 +1,50 @@
+skill_id: diagnostic_questioning_ui_acceptance_v1
+name: 基于证据的诊断提问
+version: '1.0'
+trigger:
+- 当前知识掌握、误解来源或前置知识缺口尚不明确
+- 需要在继续讲解前获得可观察的理解证据
+preconditions:
+- 已有明确教学目标和至少一个待诊断知识点
+goal:
+- 通过最少量提问区分概念缺口、步骤错误和表达困难
+- 获得可用于下一轮 Skill 选择的学生证据
+procedure:
+- 请学生说出当前最确定的一点及其依据
+- 提出一个最小判别问题，避免一次询问多个概念
+- 根据回答追问“为什么”或要求举反例
+- 将证据记录为掌握信号、误解或下一关注点
+teacher_actions:
+- ask
+- elicit
+- check_understanding
+student_signals:
+- 能指出具体困惑位置并给出已有推理
+- 回答能够区分概念缺口与计算失误
+failure_modes:
+- 连续使用宽泛的“懂了吗”而没有获得证据
+- 提问中暗含答案，无法反映真实状态
+verification:
+- 学生能用一句话说明自己卡在哪里
+- 状态模型能够产生明确的下一教学关注点
+bloom_category: 理解
+teaching_strategies:
+- 提问与等待
+- 苏格拉底式追问
+- 根据学生反应动态调整
+skill_type: diagnostic
+added_reason: 原始 Skill 主要描述知识讲授流程，缺少学生回答含糊时的显式状态诊断方法。
+applicable_when:
+- 学生只说“不懂”或给出无法定位原因的错误答案
+- 学生的真实掌握状态与自我评价不一致
+courses: []
+topic_tags: []
+required_topic_tags: []
+trigger_states: []
+required_prior_knowledge: []
+prerequisite_mastery_bypass: 0.65
+action_type: subject_instruction
+mastery_range:
+- 0.0
+- 1.0
+misconception_tags: []

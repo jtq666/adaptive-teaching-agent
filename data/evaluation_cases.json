@@ -1,0 +1,116 @@
+[
+  {
+    "case_id": "math_derivative_foundation",
+    "title": "导数：只会背公式的基础薄弱学生",
+    "goal": {
+      "course": "高等数学",
+      "topic": "导数的极限定义",
+      "objective": "理解导数是瞬时变化率，并能从割线斜率过渡到切线斜率",
+      "knowledge_points": ["平均变化率", "极限过程", "瞬时变化率"],
+      "success_criteria": ["能解释割线如何趋近切线", "能在新情境识别瞬时变化率"]
+    },
+    "profile": {"name": "小林", "level": "基础薄弱", "prior_knowledge": ["一次函数斜率"], "learning_preferences": ["图形", "具体例子"]},
+    "initial_mastery": {"平均变化率": 0.42, "极限过程": 0.20, "瞬时变化率": 0.18},
+    "true_misconceptions": ["把导数机械记成公式，未建立极限或瞬时变化率含义"],
+    "expected_focus": "极限",
+    "acceptable_skills": ["derivative_intro_via_slope_limit_v1", "derivative_limit_definition_v1", "intro_derivative_via_instantaneous_velocity_v1"],
+    "expected_switch_types": ["diagnostic", "scaffold", "transfer"],
+    "pretest_score": 28,
+    "responses": {"confused": "我只记得公式，但不知道为什么要取极限。", "partial": "我理解了一部分，因为时间间隔变小，平均变化率会接近瞬时变化率。", "correct": "因为割线两点逐渐靠近，所以斜率的极限就是切线斜率，我可以解释这个过程。", "transfer": "换一个新题同样可以：先求一小段平均变化率，再让间隔趋近于零，所以这是瞬时变化率。"}
+  },
+  {
+    "case_id": "math_integral_transfer",
+    "title": "变上限积分：会套简单公式但不会迁移",
+    "goal": {
+      "course": "高等数学",
+      "topic": "变上限积分求导",
+      "objective": "根据上下限和被积函数结构选择求导方法并解释依据",
+      "knowledge_points": ["基本公式", "复合上限", "含参数被积函数"],
+      "success_criteria": ["能区分三类结构", "能处理一个变式"]
+    },
+    "profile": {"name": "小周", "level": "中等", "prior_knowledge": ["微积分基本定理", "链式法则"], "learning_preferences": ["对比表格"]},
+    "initial_mastery": {"基本公式": 0.72, "复合上限": 0.46, "含参数被积函数": 0.30},
+    "true_misconceptions": ["对“变上限积分求导”的关键关系理解不稳定"],
+    "expected_focus": "复合",
+    "acceptable_skills": ["variable_upper_limit_integration_v1"],
+    "expected_switch_types": ["scaffold", "transfer"],
+    "pretest_score": 52,
+    "responses": {"confused": "简单公式我会，但换成复合上限就搞不清了。", "partial": "我理解了一部分，因为上限是复合函数，所以应该还要用链式法则。", "correct": "因为先把积分看成外层函数，再对复合上限求导，所以可以推出还要乘上内层导数。", "transfer": "换一个新题同样先判断结构，再用基本公式和链式法则，所以我可以处理新的上限。"}
+  },
+  {
+    "case_id": "physics_first_law",
+    "title": "牛顿第一定律：把运动等同于受力",
+    "goal": {
+      "course": "大学物理",
+      "topic": "牛顿第一定律",
+      "objective": "区分维持运动和改变运动状态，理解惯性参考系中的第一定律",
+      "knowledge_points": ["惯性", "合力与运动变化", "惯性参考系"],
+      "success_criteria": ["能纠正运动必须有力维持的误解", "能分析工程实例"]
+    },
+    "profile": {"name": "小陈", "level": "基础薄弱", "prior_knowledge": ["速度"], "learning_preferences": ["生活实例"]},
+    "initial_mastery": {"惯性": 0.28, "合力与运动变化": 0.18, "惯性参考系": 0.12},
+    "true_misconceptions": ["混淆力、运动状态变化与守恒条件"],
+    "expected_focus": "力",
+    "acceptable_skills": ["newtons_first_law_via_engineering_examples_v1"],
+    "expected_switch_types": ["diagnostic", "correction", "transfer"],
+    "pretest_score": 24,
+    "responses": {"confused": "物体要一直运动就应该一直有力推着，我还是不明白。", "partial": "我理解了一部分，因为没有合力时速度可以不变，力是改变运动状态。", "correct": "因为合力决定速度是否改变，所以匀速运动不需要持续合力，我可以用惯性解释。", "transfer": "换一个新题同样先看合力是否为零，所以冰面上的物体可以保持匀速，这是惯性。"}
+  },
+  {
+    "case_id": "physics_momentum",
+    "title": "动量守恒：忽略系统与外力条件",
+    "goal": {
+      "course": "大学物理",
+      "topic": "动量守恒条件",
+      "objective": "从系统边界和外力判断能否使用动量守恒",
+      "knowledge_points": ["系统边界", "内力与外力", "动量守恒"],
+      "success_criteria": ["能先选系统再判断外力", "能迁移到碰撞变式"]
+    },
+    "profile": {"name": "小冯", "level": "中等", "prior_knowledge": ["牛顿第三定律", "动量"], "learning_preferences": ["公式推导", "反例"]},
+    "initial_mastery": {"系统边界": 0.35, "内力与外力": 0.48, "动量守恒": 0.55},
+    "true_misconceptions": ["混淆力、运动状态变化与守恒条件"],
+    "expected_focus": "外力",
+    "acceptable_skills": ["transition_from_newton_to_momentum_v1", "momentum_conservation_spatial_uniformity_v1", "newtons_third_law_content_formula_v1"],
+    "expected_switch_types": ["correction", "transfer"],
+    "pretest_score": 46,
+    "responses": {"confused": "只要两个物体碰撞就一定守恒吗？我搞不清外力条件。", "partial": "我理解了一部分，因为先选系统，系统外的力才算外力。", "correct": "因为系统总动量变化由外力冲量决定，所以外力冲量可忽略时可以使用动量守恒。", "transfer": "换一个新题同样先划系统边界，再检查外力冲量，所以可以判断碰撞中是否守恒。"}
+  },
+  {
+    "case_id": "programming_binary_boundary",
+    "title": "二分查找：背 left/right 模板导致边界混乱",
+    "goal": {
+      "course": "程序设计",
+      "topic": "二分查找边界条件",
+      "objective": "从区间不变量独立推导循环条件和边界更新",
+      "knowledge_points": ["区间定义", "循环不变量", "边界更新"],
+      "success_criteria": ["能推导两种区间版本", "能处理查找左边界变式"]
+    },
+    "profile": {"name": "小吴", "level": "中等", "prior_knowledge": ["while循环", "有序数组"], "learning_preferences": ["代码演示", "具体测试用例"]},
+    "initial_mastery": {"区间定义": 0.32, "循环不变量": 0.24, "边界更新": 0.38},
+    "true_misconceptions": ["混淆二分查找的区间定义与边界更新规则"],
+    "expected_focus": "区间",
+    "acceptable_skills": ["binary_search_boundary_by_interval_definition"],
+    "expected_switch_types": ["diagnostic", "correction", "transfer"],
+    "pretest_score": 38,
+    "responses": {"confused": "我总是记不住 left < right 还是 <=，right 也会混淆。", "partial": "我理解了一部分，因为左闭右闭在 left 等于 right 时还有一个元素。", "correct": "因为区间定义是不变量，所以闭区间要检查 left==right，并且 middle 已检查后 right 更新为 middle-1。", "transfer": "换一个新题同样先定义搜索区间，再维护不变量，所以查找左边界也能推出更新规则。"}
+  },
+  {
+    "case_id": "programming_binary_transfer",
+    "title": "二分查找：标准题会写但变式不会迁移",
+    "goal": {
+      "course": "程序设计",
+      "topic": "二分查找迁移",
+      "objective": "将区间不变量迁移到查找第一个满足条件的位置",
+      "knowledge_points": ["循环不变量", "候选答案", "终止条件"],
+      "success_criteria": ["能定义变式搜索区间", "能解释终止时答案位置"]
+    },
+    "profile": {"name": "小郑", "level": "较好", "prior_knowledge": ["标准二分查找", "数组索引"], "learning_preferences": ["变式练习"]},
+    "initial_mastery": {"循环不变量": 0.72, "候选答案": 0.42, "终止条件": 0.58},
+    "true_misconceptions": ["混淆二分查找的区间定义与边界更新规则"],
+    "expected_focus": "候选",
+    "acceptable_skills": ["binary_search_boundary_by_interval_definition"],
+    "expected_switch_types": ["scaffold", "transfer"],
+    "pretest_score": 64,
+    "responses": {"confused": "标准查找我会，但找第一个位置时又不知道怎么更新边界。", "partial": "我理解了一部分，因为找到满足条件的元素后它仍可能不是最左边，要保留候选答案。", "correct": "因为不变量要保留可能的最左答案，所以满足条件时继续收缩右侧，并在终止时检查候选位置。", "transfer": "换一个新题同样定义候选答案和区间不变量，所以找第一个大于等于目标的位置也能推出规则。"}
+  }
+]

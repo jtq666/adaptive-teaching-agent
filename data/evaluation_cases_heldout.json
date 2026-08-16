@@ -1,0 +1,314 @@
+[
+  {
+    "case_id": "heldout_math_derivative_sensor_rate",
+    "title": "传感器采样：从离散变化率解释瞬时变化率",
+    "goal": {
+      "course": "高等数学",
+      "topic": "导数与瞬时变化率",
+      "objective": "从温度传感器的短时间平均变化率解释某时刻的瞬时变化率",
+      "knowledge_points": ["平均变化率", "极限逼近", "瞬时变化率"],
+      "success_criteria": ["能说明时间间隔趋零的作用", "能迁移到另一种传感器"]
+    },
+    "profile": {"name": "留出学生M1", "level": "中等", "prior_knowledge": ["函数", "斜率"], "learning_preferences": ["数据表格"]},
+    "initial_mastery": {"平均变化率": 0.58, "极限逼近": 0.34, "瞬时变化率": 0.30},
+    "true_misconceptions": ["把导数机械记成公式，未建立极限或瞬时变化率含义"],
+    "expected_focus": "极限",
+    "acceptable_skills": ["derivative_intro_via_slope_limit_v1", "derivative_limit_definition_v1", "intro_derivative_via_instantaneous_velocity_v1"],
+    "expected_switch_types": ["diagnostic", "scaffold", "transfer"],
+    "pretest_score": 41,
+    "responses": {
+      "confused": "采样间隔已经很小了，我觉得直接把这段平均值当成瞬时值就行。",
+      "partial": "我理解了一部分，因为把采样间隔继续缩小，平均变化率会逐渐稳定。",
+      "correct": "因为瞬时变化率不是某个固定小区间的平均值，而是时间间隔趋近零时平均变化率的极限。",
+      "transfer": "换成压力传感器也一样：先算短区间平均变化率，再考察区间趋零的极限，所以能得到瞬时变化率。"
+    },
+    "split": "held_out",
+    "profile_group": "partial_mastery"
+  },
+  {
+    "case_id": "heldout_math_derivative_graph_tangent",
+    "title": "函数图像：割线看似贴近但不等于切线",
+    "goal": {
+      "course": "高等数学",
+      "topic": "导数的几何意义",
+      "objective": "解释割线斜率通过极限过程成为切线斜率",
+      "knowledge_points": ["割线斜率", "极限过程", "切线斜率"],
+      "success_criteria": ["能区分近似与极限", "能解释新曲线上的切线"]
+    },
+    "profile": {"name": "留出学生M2", "level": "基础薄弱", "prior_knowledge": ["一次函数斜率"], "learning_preferences": ["图形", "反例"]},
+    "initial_mastery": {"割线斜率": 0.46, "极限过程": 0.16, "切线斜率": 0.22},
+    "true_misconceptions": ["把导数机械记成公式，未建立极限或瞬时变化率含义"],
+    "expected_focus": "极限",
+    "acceptable_skills": ["derivative_intro_via_slope_limit_v1", "derivative_limit_definition_v1"],
+    "expected_switch_types": ["diagnostic", "correction", "transfer"],
+    "pretest_score": 27,
+    "responses": {
+      "confused": "两点离得很近时割线看起来就是切线，我觉得不需要极限。",
+      "partial": "我知道两点要靠近，但还说不清为什么不能直接取一个很小距离。",
+      "correct": "固定的很小距离仍只是近似；只有第二点趋近第一点时，割线斜率的极限才定义切线斜率。",
+      "transfer": "在另一条曲线上也要让第二个点趋近目标点，不能任选一条很近的割线，所以仍用斜率极限。"
+    },
+    "split": "held_out",
+    "profile_group": "misconception_prone"
+  },
+  {
+    "case_id": "heldout_math_integral_lower_sign",
+    "title": "变下限积分：负号来源与链式法则",
+    "goal": {
+      "course": "高等数学",
+      "topic": "变上限积分求导",
+      "objective": "解释变下限积分求导中的负号并正确应用链式法则",
+      "knowledge_points": ["基本公式", "变下限符号", "链式法则"],
+      "success_criteria": ["能解释负号来源", "能完成复合下限变式"]
+    },
+    "profile": {"name": "留出学生M3", "level": "中等", "prior_knowledge": ["微积分基本定理", "链式法则"], "learning_preferences": ["逐步推导"]},
+    "initial_mastery": {"基本公式": 0.68, "变下限符号": 0.32, "链式法则": 0.54},
+    "true_misconceptions": ["对“变上限积分求导”的关键关系理解不稳定"],
+    "expected_focus": "复合",
+    "acceptable_skills": ["variable_upper_limit_integration_v1"],
+    "expected_switch_types": ["scaffold", "correction", "transfer"],
+    "pretest_score": 49,
+    "responses": {
+      "confused": "下限是函数时我总忘记为什么前面要有负号。",
+      "partial": "我理解了一部分，交换积分上下限会产生负号，复合下限还要乘导数。",
+      "correct": "因为变下限项在牛顿莱布尼茨公式中被减去，再对下限复合函数用链式法则，所以得到负号和内层导数。",
+      "transfer": "换成另一个复合下限时也先保留下限项的减号，再乘下限函数的导数，因此可以迁移。"
+    },
+    "split": "held_out",
+    "profile_group": "misconception_prone"
+  },
+  {
+    "case_id": "heldout_math_integral_composite_upper",
+    "title": "复合上限：识别外层积分函数与内层导数",
+    "goal": {
+      "course": "高等数学",
+      "topic": "变上限积分的链式求导",
+      "objective": "在复合上限的新表达中识别并应用链式法则",
+      "knowledge_points": ["积分函数", "复合上限", "内层导数"],
+      "success_criteria": ["能拆分内外层", "能迁移到三角函数上限"]
+    },
+    "profile": {"name": "留出学生M4", "level": "较好", "prior_knowledge": ["积分", "链式法则"], "learning_preferences": ["变式练习"]},
+    "initial_mastery": {"积分函数": 0.74, "复合上限": 0.52, "内层导数": 0.48},
+    "true_misconceptions": ["对“变上限积分的链式求导”的关键关系理解不稳定"],
+    "expected_focus": "复合",
+    "acceptable_skills": ["variable_upper_limit_integration_v1"],
+    "expected_switch_types": ["scaffold", "transfer"],
+    "pretest_score": 59,
+    "responses": {
+      "confused": "上限换成平方以后，我会代入被积函数，但经常漏掉上限的导数。",
+      "partial": "我理解了一部分，积分先看作一个外层函数，上限平方是内层。",
+      "correct": "因为这是积分函数与复合上限的复合，所以先把上限代入被积函数，再乘上限函数的导数。",
+      "transfer": "上限换成正弦函数时结构不变，仍是代入被积函数后乘正弦上限的导数。"
+    },
+    "split": "held_out",
+    "profile_group": "transfer_difficult"
+  },
+  {
+    "case_id": "heldout_physics_first_law_spacecraft",
+    "title": "关闭推进器后：航天器是否需要力维持运动",
+    "goal": {
+      "course": "大学物理",
+      "topic": "牛顿第一定律与惯性",
+      "objective": "在低阻力情境中区分维持速度与改变速度所需的力",
+      "knowledge_points": ["惯性", "合力", "运动状态变化"],
+      "success_criteria": ["能解释关闭推进器后的运动", "能迁移到冰面情境"]
+    },
+    "profile": {"name": "留出学生P1", "level": "基础薄弱", "prior_knowledge": ["速度", "力"], "learning_preferences": ["生活实例"]},
+    "initial_mastery": {"惯性": 0.25, "合力": 0.20, "运动状态变化": 0.18},
+    "true_misconceptions": ["混淆力、运动状态变化与守恒条件"],
+    "expected_focus": "力",
+    "acceptable_skills": ["newtons_first_law_via_engineering_examples_v1"],
+    "expected_switch_types": ["diagnostic", "correction", "transfer"],
+    "pretest_score": 22,
+    "responses": {
+      "confused": "推进器关闭就没有向前的力了，航天器应该马上停下。",
+      "partial": "我理解了一部分，没有合力时速度不会继续改变。",
+      "correct": "因为合力为零意味着加速度为零，不是速度为零，所以航天器会保持原来的速度。",
+      "transfer": "冰面上阻力很小时也先判断合力；合力近似为零就保持速度，这和航天器结构相同。"
+    },
+    "split": "held_out",
+    "profile_group": "foundation_weak"
+  },
+  {
+    "case_id": "heldout_physics_second_law_net_force",
+    "title": "多力作用：不能把单个力直接代入 F=ma",
+    "goal": {
+      "course": "大学物理",
+      "topic": "牛顿第二定律与合力",
+      "objective": "通过受力分析得到合力并判断加速度方向",
+      "knowledge_points": ["受力分析", "合力", "加速度方向"],
+      "success_criteria": ["能区分单个力与合力", "能处理二维受力变式"]
+    },
+    "profile": {"name": "留出学生P2", "level": "中等", "prior_knowledge": ["力", "质量", "加速度"], "learning_preferences": ["图示"]},
+    "initial_mastery": {"受力分析": 0.42, "合力": 0.34, "加速度方向": 0.40},
+    "true_misconceptions": ["混淆力、运动状态变化与守恒条件"],
+    "expected_focus": "合力",
+    "acceptable_skills": ["newtons_second_law_intro_v1"],
+    "expected_switch_types": ["diagnostic", "scaffold", "correction", "transfer"],
+    "pretest_score": 39,
+    "responses": {
+      "confused": "物体受两个力时，我随便挑一个力代进 F=ma 应该也可以。",
+      "partial": "我理解了一部分，要先按方向把所有力相加得到合力。",
+      "correct": "因为牛顿第二定律中的 F 是矢量合力，所以先画受力图求合力，加速度方向与合力方向一致。",
+      "transfer": "换成二维受力也先分解并求矢量合力，再由合力除以质量得到加速度。"
+    },
+    "split": "held_out",
+    "profile_group": "misconception_prone"
+  },
+  {
+    "case_id": "heldout_physics_third_law_pair",
+    "title": "作用反作用：大小相等为何不会抵消",
+    "goal": {
+      "course": "大学物理",
+      "topic": "牛顿第三定律",
+      "objective": "识别作用力与反作用力作用在不同物体上",
+      "knowledge_points": ["相互作用力对", "受力对象", "合力判断"],
+      "success_criteria": ["能标出两个受力对象", "能迁移到人推墙情境"]
+    },
+    "profile": {"name": "留出学生P3", "level": "中等", "prior_knowledge": ["力", "相互作用"], "learning_preferences": ["对比"]},
+    "initial_mastery": {"相互作用力对": 0.48, "受力对象": 0.27, "合力判断": 0.31},
+    "true_misconceptions": ["混淆力、运动状态变化与守恒条件"],
+    "expected_focus": "力",
+    "acceptable_skills": ["newtons_third_law_content_formula_v1"],
+    "expected_switch_types": ["diagnostic", "correction", "transfer"],
+    "pretest_score": 36,
+    "responses": {
+      "confused": "作用力和反作用力大小相等方向相反，所以它们应该在同一个物体上抵消。",
+      "partial": "我理解了一部分，这两个力分别作用在两个不同物体上。",
+      "correct": "因为作用力与反作用力作用对象不同，不能作为同一物体的合力相加；分析合力必须先选定对象。",
+      "transfer": "人推墙时手对墙和墙对手是一对力，分别作用在墙和人上，所以不能互相抵消。"
+    },
+    "split": "held_out",
+    "profile_group": "misconception_prone"
+  },
+  {
+    "case_id": "heldout_physics_momentum_recoil",
+    "title": "反冲问题：系统边界决定动量是否守恒",
+    "goal": {
+      "course": "大学物理",
+      "topic": "动量守恒与系统边界",
+      "objective": "在反冲问题中选择系统并检查外力冲量",
+      "knowledge_points": ["系统边界", "外力冲量", "动量守恒"],
+      "success_criteria": ["能说明选系统的理由", "能迁移到爆炸分离情境"]
+    },
+    "profile": {"name": "留出学生P4", "level": "较好", "prior_knowledge": ["动量", "牛顿第三定律"], "learning_preferences": ["公式推导", "反例"]},
+    "initial_mastery": {"系统边界": 0.50, "外力冲量": 0.38, "动量守恒": 0.62},
+    "true_misconceptions": ["混淆力、运动状态变化与守恒条件"],
+    "expected_focus": "外力",
+    "acceptable_skills": ["momentum_conservation_spatial_uniformity_v1", "transition_from_newton_to_momentum_v1"],
+    "expected_switch_types": ["scaffold", "correction", "transfer"],
+    "pretest_score": 53,
+    "responses": {
+      "confused": "只要看到反冲我就直接写动量守恒，不知道为什么还要选系统。",
+      "partial": "我理解了一部分，把两个反冲物体放进同一系统后，它们之间的力是内力。",
+      "correct": "因为系统总动量只由外力冲量改变，所以先划定包含双方的系统，再判断短时间内外力冲量能否忽略。",
+      "transfer": "爆炸分离问题也先把碎片作为整体系统并检查外力冲量，满足条件后才能使用总动量守恒。"
+    },
+    "split": "held_out",
+    "profile_group": "transfer_difficult"
+  },
+  {
+    "case_id": "heldout_program_binary_empty_interval",
+    "title": "空数组与空区间：初始边界必须与定义一致",
+    "goal": {
+      "course": "程序设计",
+      "topic": "二分查找区间定义",
+      "objective": "用区间定义解释空数组时的初始边界与循环条件",
+      "knowledge_points": ["区间定义", "空区间", "循环条件"],
+      "success_criteria": ["能处理 n=0", "能解释循环为何不进入"]
+    },
+    "profile": {"name": "留出学生C1", "level": "基础薄弱", "prior_knowledge": ["循环", "数组"], "learning_preferences": ["边界用例"]},
+    "initial_mastery": {"区间定义": 0.30, "空区间": 0.18, "循环条件": 0.25},
+    "true_misconceptions": ["混淆二分查找的区间定义与边界更新规则"],
+    "expected_focus": "区间",
+    "acceptable_skills": ["binary_search_boundary_by_interval_definition"],
+    "expected_switch_types": ["diagnostic", "correction", "transfer"],
+    "pretest_score": 26,
+    "responses": {
+      "confused": "数组为空时我还是把 left 和 right 都设成 0，然后进入循环。",
+      "partial": "我理解了一部分，左闭右开 [0,0) 本来就是空区间。",
+      "correct": "因为 n=0 时左闭右开初始区间是 [0,0)，left==right 表示为空，所以 left<right 的循环不会进入。",
+      "transfer": "换成任意空子区间 [k,k) 也一样没有元素，因此循环条件会立即判定结束。"
+    },
+    "split": "held_out",
+    "profile_group": "boundary_weak"
+  },
+  {
+    "case_id": "heldout_program_binary_open_interval",
+    "title": "左闭右开版本：right 更新不能照搬闭区间",
+    "goal": {
+      "course": "程序设计",
+      "topic": "二分查找边界更新",
+      "objective": "从左闭右开区间推导 right 的更新规则",
+      "knowledge_points": ["区间定义", "边界更新", "不变量保持"],
+      "success_criteria": ["能解释 right=middle", "能与闭区间版本对比"]
+    },
+    "profile": {"name": "留出学生C2", "level": "中等", "prior_knowledge": ["while循环", "数组索引"], "learning_preferences": ["代码对比"]},
+    "initial_mastery": {"区间定义": 0.52, "边界更新": 0.28, "不变量保持": 0.34},
+    "true_misconceptions": ["混淆二分查找的区间定义与边界更新规则"],
+    "expected_focus": "边界",
+    "acceptable_skills": ["binary_search_boundary_by_interval_definition"],
+    "expected_switch_types": ["diagnostic", "scaffold", "correction", "transfer"],
+    "pretest_score": 37,
+    "responses": {
+      "confused": "左闭右开时我也习惯写 right=middle-1，不知道哪里不对。",
+      "partial": "我理解了一部分，right 本身不属于区间，所以新的右边界可以放在 middle。",
+      "correct": "因为 middle 已排除且右端点不包含，令 right=middle 后新范围 [left,middle) 正好排除 middle 并保持左闭右开不变量。",
+      "transfer": "换一个长度不同的数组仍按同一区间定义更新，不能把闭区间的 middle-1 机械搬过来。"
+    },
+    "split": "held_out",
+    "profile_group": "misconception_prone"
+  },
+  {
+    "case_id": "heldout_program_lower_bound_duplicates",
+    "title": "重复元素：查找第一个满足条件的位置",
+    "goal": {
+      "course": "程序设计",
+      "topic": "二分查找候选边界",
+      "objective": "用候选答案不变量处理含重复元素的 lower_bound",
+      "knowledge_points": ["候选答案", "区间收缩", "终止位置"],
+      "success_criteria": ["找到后继续向左", "能解释终止位置"]
+    },
+    "profile": {"name": "留出学生C3", "level": "较好", "prior_knowledge": ["标准二分查找", "数组"], "learning_preferences": ["变式练习"]},
+    "initial_mastery": {"候选答案": 0.40, "区间收缩": 0.62, "终止位置": 0.44},
+    "true_misconceptions": ["混淆二分查找的区间定义与边界更新规则"],
+    "expected_focus": "候选",
+    "acceptable_skills": ["binary_search_boundary_by_interval_definition"],
+    "expected_switch_types": ["scaffold", "correction", "transfer"],
+    "pretest_score": 55,
+    "responses": {
+      "confused": "遇到等于目标的元素我就直接返回，所以重复元素时经常不是第一个。",
+      "partial": "我理解了一部分，找到相等值只能说明它是候选，还要继续搜索左侧。",
+      "correct": "因为要保持第一个满足条件的位置仍在候选区间中，相等时记录或保留候选并收缩右侧，终止时得到最左位置。",
+      "transfer": "找第一个大于等于目标的位置也维持同样的候选不变量，只是满足条件的判断改成大于等于。"
+    },
+    "split": "held_out",
+    "profile_group": "transfer_difficult"
+  },
+  {
+    "case_id": "heldout_program_binary_singleton",
+    "title": "单元素数组：循环条件的最小反例",
+    "goal": {
+      "course": "程序设计",
+      "topic": "二分查找循环不变量",
+      "objective": "用单元素数组检验闭区间循环条件和终止条件",
+      "knowledge_points": ["闭区间", "循环条件", "终止判断"],
+      "success_criteria": ["能判断 left==right", "能迁移到两元素数组"]
+    },
+    "profile": {"name": "留出学生C4", "level": "中等", "prior_knowledge": ["循环", "有序数组"], "learning_preferences": ["最小反例"]},
+    "initial_mastery": {"闭区间": 0.38, "循环条件": 0.30, "终止判断": 0.33},
+    "true_misconceptions": ["混淆二分查找的区间定义与边界更新规则"],
+    "expected_focus": "区间",
+    "acceptable_skills": ["binary_search_boundary_by_interval_definition"],
+    "expected_switch_types": ["diagnostic", "correction", "transfer"],
+    "pretest_score": 34,
+    "responses": {
+      "confused": "只有一个元素时 left==right，我觉得循环已经结束，不必检查它。",
+      "partial": "我理解了一部分，闭区间在 left==right 时还包含这个下标。",
+      "correct": "因为 [left,right] 在两端相等时仍含一个元素，所以循环应允许 left<=right 并检查这个唯一候选。",
+      "transfer": "两元素数组收缩到一个元素时情况相同，仍要检查最后一个闭区间候选后才能结束。"
+    },
+    "split": "held_out",
+    "profile_group": "boundary_weak"
+  }
+]

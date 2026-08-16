@@ -1,0 +1,40 @@
+[theme]
+base = "light"
+primaryColor = "#0F766E"
+backgroundColor = "#F8FAF9"
+secondaryBackgroundColor = "#EDF4F2"
+textColor = "#172523"
+linkColor = "#0F766E"
+borderColor = "#C9D8D4"
+greenColor = "#16856A"
+orangeColor = "#B86F20"
+redColor = "#C2413B"
+blueColor = "#256A8A"
+violetColor = "#6D5AA7"
+grayColor = "#63716E"
+chartCategoricalColors = ["#0F766E", "#C07B2C", "#70807C", "#4A7F9E", "#816AA5", "#B7554F"]
+dataframeHeaderBackgroundColor = "#E4EEEB"
+showWidgetBorder = true
+showSidebarBorder = false
+baseRadius = "12px"
+buttonRadius = "10px"
+font = "'Microsoft YaHei UI', 'PingFang SC', sans-serif"
+headingFont = "'STZhongsong', 'Microsoft YaHei UI', serif"
+codeFont = "'Cascadia Code', 'Consolas', monospace"
+baseFontSize = 15
+headingFontWeights = [700, 700, 600, 600, 600, 600]
+linkUnderline = false
+
+[theme.sidebar]
+backgroundColor = "#123638"
+secondaryBackgroundColor = "#1A4647"
+textColor = "#EDF8F5"
+borderColor = "#2A5757"
+primaryColor = "#78D4C3"
+codeBackgroundColor = "#0E2C2E"
+
+[server]
+headless = true
+
+[client]
+toolbarMode = "minimal"

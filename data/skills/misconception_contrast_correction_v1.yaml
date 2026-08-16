@@ -1,0 +1,41 @@
+skill_id: misconception_contrast_correction_v1
+name: 对比与反例驱动的误解纠正
+version: '1.0'
+skill_type: correction
+added_reason: 原始 Skill 虽记录失败模式，但没有统一的多轮误解纠正与教学切换流程。
+applicable_when:
+- 同一错误解释在连续回答中重复出现
+- 学生能记住结论但无法区分相近概念
+trigger:
+- 同一误解出现至少两次
+- 原教学步骤未能改变学生的错误模型
+preconditions:
+- 已有误解标签和学生原话证据
+goal:
+- 让学生主动发现错误模型与正确模型的关键冲突
+- 用反例替换机械记忆并恢复后续迁移能力
+procedure:
+- 原样复述学生的错误解释，确认没有误读
+- 将错误解释与正确原则并排比较，只突出一个差异
+- 给出能使错误解释失效的最小反例
+- 要求学生修正原解释并说明反例为什么成立
+- 用一个轻微变式再次检查
+teacher_actions:
+- contrast
+- correct
+- demonstrate
+- ask
+student_signals:
+- 学生能够指出原解释的具体矛盾
+- 学生用修正后的原则处理变式
+failure_modes:
+- 只宣布答案错误，没有处理错误背后的模型
+- 一次引入多个反例造成新的信息负担
+verification:
+- 学生重写原解释并标出改动原因
+- 学生判断一个边界例子并解释依据
+bloom_category: 分析
+teaching_strategies:
+- 对比学习
+- 错误示范与纠错
+- 根据学生反应动态调整

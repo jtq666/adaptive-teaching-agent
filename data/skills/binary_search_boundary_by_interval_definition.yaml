@@ -1,0 +1,61 @@
+skill_id: binary_search_boundary_by_interval_definition
+name: 区间定义驱动的二分查找边界教学
+version: '1.0'
+trigger:
+- 学生已了解二分查找基本流程，但在编写代码时频繁混淆while循环条件（left < right 与 left <= right）
+- 学生不清楚right边界更新时应该用middle还是middle-1，导致代码出现死循环或漏查
+- 学生能写出能运行的二分查找代码，但无法解释边界条件选择的依据，处于'背代码'状态
+preconditions:
+- 学生已掌握二分查找的基本思想（在有序数组中通过折半缩小搜索范围）
+- 学生具备基本的编程能力，能理解变量赋值和循环结构
+- 学生熟悉数组索引从0开始的基本规则
+goal:
+- 学生能清晰区分左闭右闭与左闭右开两种区间定义，并解释其对边界条件的影响
+- 学生能根据区间定义独立推导出while循环条件（< 或 <=）以及right更新规则（middle 或 middle-1）
+- 学生能手写出两种区间定义下正确的二分查找代码，并能在LeetCode 704上通过
+procedure:
+- 引入痛点：指出二分查找'一看就会，一写就废'的常见现象，询问学生是否曾因边界条件写错而调试很久
+- 明确核心难点：提出两个最容易写乱的边界条件——while循环中的<或<=，以及right更新时的middle或middle-1，并说明这两个问题都源于区间定义不清晰
+- 引入区间定义概念：讲解左闭右闭（[left, right]）与左闭右开（[left, right)）两种区间，强调'不变量'思想——每次循环中搜索区间必须保持合法
+- 手撕左闭右闭版本：以[0, n-1]为例，逐步推导——当left==right时区间内仍有一个元素，因此while条件应为left<=right；当target小于nums[middle]时，right应更新为middle-1，因为middle已检查过
+- 用具体数值验证：以left=right=1为例，演示若使用left<right会漏掉该元素，论证<=的合理性
+- 手撕左闭右开版本：以[0, n)为例，对比推导——当left==right时区间为空，因此while条件应为left<right；当target小于nums[middle]时，right应更新为middle，因为右边界是开区间不包含middle
+- 对比总结：并排展示两个版本的代码，逐行对比while条件、right初始值（size-1 vs size）和right更新规则，总结'区间定义决定边界写法'的核心原则
+- 回应常见疑问：解释为什么'写middle也能过'——在某些测试用例下恰好正确，但不符合区间定义，在边界情况下会出错，强调必须按区间定义推导
+- 总结迁移：总结两种版本的核心差异，推荐学生到LeetCode 704上练习，并引导阅读配套文字版文章巩固理解
+teacher_actions:
+- ask
+- explain
+- demonstrate
+- contrast
+- scaffold
+- prompt
+- summarize
+student_signals:
+- 学生能用自己的语言解释左闭右闭与左闭右开的区别，并说出各自对应的while条件
+- 学生能在不参考代码的情况下，根据区间定义推导出right更新规则
+- 学生能在LeetCode 704上独立写出两种版本的二分查找代码并通过测试
+failure_modes:
+- 学生混淆两个版本的边界规则，如把左闭右闭的left<=right用到左闭右开中，导致死循环
+- 学生虽然能写出正确代码，但只是机械记忆，无法解释为什么right要更新为middle-1或middle
+- 学生缺乏对'不变量'思想的理解，当题目稍作变形（如查找左边界）时无法迁移
+verification:
+- 让学生在不看笔记的情况下，分别写出左闭右闭和左闭右开两个版本的二分查找代码
+- 给出一个具体数组和target，让学生口头推演left和right的变化过程，并解释每一步的依据
+- 提供变式题目（如查找第一个等于target的位置），观察学生能否基于区间定义调整边界条件
+source_video: 手把手带你撕出正确的二分法 ｜ 二分查找法 ｜ 二分搜索法 ｜ LeetCode：704. 二分查找.mp4
+source_course: 算法设计
+source_timestamp: 整节
+bloom_category: 应用
+teaching_strategies:
+- 类比或具体例子：用具体数值（如left=right=1）验证区间合法性
+- 逐步拆解：将二分法代码逐行拆解，每一步都结合区间定义解释
+- 对比学习：左闭右闭与左闭右开两个版本进行对比，突出边界处理差异
+- 先直觉后形式化：先指出常见困惑，再引入区间定义作为理论依据
+- 提问与等待：通过'灵魂考问'式提问引导思考边界条件
+- 根据学生反应动态调整：针对常见的'写middle也能过'的疑问进行专门解释
+- 总结与迁移：总结区间定义决定边界写法的原则，引导到LeetCode练习
+courses: [程序设计, 算法设计]
+topic_tags: [二分查找, 区间定义, 循环不变量, 边界更新]
+trigger_states: [initial, followup, confusion, misconception]
+required_prior_knowledge: [循环, 数组, 二分查找基础]
