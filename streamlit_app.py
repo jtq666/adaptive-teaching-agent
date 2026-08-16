@@ -28,7 +28,7 @@ with st.sidebar:
     else:
         st.badge("LLM 未连接", icon=":material/cloud_off:", color="orange")
         st.caption("请配置 API 后再进行真实教学。")
-    st.caption("v5 · 会话与评估自动保存到本地 JSON")
+    st.caption("v6 · 会话与评估自动保存到本地 JSON")
     with st.popover("答辩演示路线", icon=":material/route:", width="stretch"):
         st.markdown("**1　实时教学**")
         st.caption("展示状态更新与教学策略切换")
