@@ -45,7 +45,6 @@ $rootFiles = @(
     ".env.example", ".gitignore", "streamlit_app.py", "pyproject.toml", "pytest.ini",
     "requirements.txt", "requirements-lock.txt", "requirements-e2e.txt", "README.md"
 )
-$rootFiles += (Get-ChildItem -LiteralPath $projectRoot -File -Filter "*.md").Name
 foreach ($name in $rootFiles) {
     $source = Join-Path $projectRoot $name
     if (Test-Path -LiteralPath $source) {
