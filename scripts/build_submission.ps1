@@ -84,6 +84,14 @@ if (Test-Path -LiteralPath $adaptiveAcceptance) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $adaptiveTarget) -Force | Out-Null
     Copy-Item -LiteralPath $adaptiveAcceptance -Destination $adaptiveTarget
 }
+foreach ($demoName in @("demo_physics_run.json", "demo_derivative_run.json")) {
+    $demoSource = Join-Path $projectRoot "output\evaluations\$demoName"
+    if (Test-Path -LiteralPath $demoSource) {
+        $demoTarget = Join-Path $packageRoot "output\evaluations\$demoName"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $demoTarget) -Force | Out-Null
+        Copy-Item -LiteralPath $demoSource -Destination $demoTarget
+    }
+}
 
 $evaluationSource = Join-Path $projectRoot "output\evaluations"
 $latestEvaluation = $null
