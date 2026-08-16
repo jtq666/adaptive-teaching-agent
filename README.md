@@ -13,7 +13,7 @@
 - 会话支持展示名称、复制、归档、导出和可恢复删除；历史教学目标与状态证据默认不可原地篡改。
 - 历史列表使用轻量索引、每页 20 条和选中后懒加载。测试使用隔离目录，不再污染正式档案。
 
-严格复现依赖可执行 `pip install -r requirements-lock.txt`；覆盖率验收执行 `pytest --cov=src --cov-report=term-missing --cov-fail-under=85 -q`。提交前先运行 `python scripts/quality_gate.py` 核对案例、覆盖率门槛和最新评估，再运行 `powershell -ExecutionPolicy Bypass -File scripts/prepare_submission.ps1` 完成质量审计，最后运行 `powershell -ExecutionPolicy Bypass -File scripts/build_submission.ps1` 生成白名单式交付包。自动化测试只作为核心回归，不设固定数量门槛；85% 只是基础健康线，不是题目要求。打包脚本不会删除历史数据，只复制源码、文档、一个演示会话和最新一套 810 单元完整评估，并拒绝 `.env`、缓存和密钥文件。
+严格复现依赖可执行 `pip install -r requirements-lock.txt`；覆盖率验收执行 `pytest --cov=src --cov-report=term-missing --cov-fail-under=85 -q`。提交前先运行 `python scripts/quality_gate.py` 核对案例、覆盖率门槛和最新评估，再运行 `powershell -ExecutionPolicy Bypass -File scripts/prepare_submission.ps1` 完成质量审计，最后运行 `powershell -ExecutionPolicy Bypass -File scripts/build_submission.ps1` 生成白名单式交付包。自动化测试只作为核心回归，不设固定数量门槛；85% 只是基础健康线，不是题目要求。打包脚本不会删除历史数据，只复制源码、运行数据、一个演示会话和最新一套 810 单元完整评估，并拒绝 `.env`、缓存和密钥文件。
 
 华东师范大学夏令营综合考察题（二）的完整实现。系统根据教学目标、学生画像、当前掌握状态和历史对话，逐轮选择或切换 Teaching Skill；具体怎么解释、举例和追问由真实 LLM 自主完成。
 
@@ -67,7 +67,7 @@ python scripts/demo_physics.py
 python scripts/demo_derivative.py
 ```
 
-答辩现场直接照《教学演示文档.md》输入。物理脚本会跑通 `correct → transfer → success`；导数脚本会跑通连续 `scaffold`。两套脚本都强制真实 API，余额、网络或密钥异常时直接失败，不使用离线结果冒充通过。
+答辩现场直接按 `scripts/demo_physics.py` 和 `scripts/demo_derivative.py` 的输入顺序操作。物理脚本会跑通 `correct → transfer → success`；导数脚本会跑通连续 `scaffold`。两套脚本都强制真实 API，余额、网络或密钥异常时直接失败，不使用离线结果冒充通过。
 
 使用真实 API 验证物理路线、Skill 切换和掌握度证据：
 
@@ -171,7 +171,7 @@ LLM 未配置、超时或返回非法 JSON 时，系统自动使用规则模式�
 - 固定单 Skill Agent；
 - 无 Skill Library 的通用教师 Agent。
 
-指标包括逐轮状态诊断、决策质量、单步契约通过率、上下文连续率、选项有效率、LLM 回退率、调用耗时、证据映射、八维教学行为 proxy、题目级前后测、标准化学习增益、单位轮次效率和迁移正确率。画像和种子先在案例内汇总，再以 18 个案例为独立配对单位计算 cluster bootstrap 95% CI、配对置换检验、Holm 校正、McNemar 检验和配对 Hedges g。详细结果见 [评估报告.md](评估报告.md)。
+指标包括逐轮状态诊断、决策质量、单步契约通过率、上下文连续率、选项有效率、LLM 回退率、调用耗时、证据映射、八维教学行为 proxy、题目级前后测、标准化学习增益、单位轮次效率和迁移正确率。画像和种子先在案例内汇总，再以 18 个案例为独立配对单位计算 cluster bootstrap 95% CI、配对置换检验、Holm 校正、McNemar 检验和配对 Hedges g。运行 `python scripts/run_evaluation.py --mode full` 可生成结果文件。
 
 ## 项目结构
 
@@ -187,11 +187,7 @@ LLM 未配置、超时或返回非法 JSON 时，系统自动使用规则模式�
 ├── output/evaluations/       # 评估 JSON/CSV/Markdown
 ├── .e2e-runtime/             # 真实 API 与前端验收证据
 ├── release/                  # 当前规范提交包与 SHA-256 清单
-├── tests/
-├── config/settings.yaml
-├── 评估报告.md
-├── 真实API验收报告.md
-├── 教学演示文档.md
-├── PPT演示文档.md
-└── 面试题文档.md
+├── scripts/                  # 评估、验收和两个现场演示脚本
+├── tests/                    # 自动化回归
+└── config/settings.yaml
 ```
