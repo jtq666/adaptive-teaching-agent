@@ -103,6 +103,9 @@ def test_multi_task_guard_detects_two_tasks_hidden_behind_one_question_mark():
     assert not HybridTeachingAgent._contains_multiple_requests(
         "刹车时乘客受到向后的合力。请说明这个力为什么会让速度减小？"
     )
+    assert not HybridTeachingAgent._contains_multiple_requests(
+        "你回答得很准确，这说明你已经理解了关键区别。请换一个新情境说明它如何表现？"
+    )
     assert HybridTeachingAgent._single_target(
         "说明公交车受到的合力是否为零。合力对运动状态产生了什么影响",
         "合力与运动变化",

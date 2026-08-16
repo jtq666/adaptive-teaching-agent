@@ -464,6 +464,7 @@ class EvaluationRunner:
         continuity_checks: list[float] = []
         option_checks: list[float] = []
         evidence_mapping_checks: list[float] = []
+        concern_handling_checks: list[float] = []
 
         def item_scores() -> dict[str, float]:
             """Question-level deterministic proxy, never presented as real testing."""
@@ -505,6 +506,10 @@ class EvaluationRunner:
                 action_types.append(turn.action_type)
                 student_contexts.append(previous_response)
                 teacher_messages.append(turn.teacher_message)
+                has_concern = bool(HybridTeachingAgent._student_concern(previous_response))
+                concern_handling_checks.append(
+                    float(not has_concern or bool(turn.generation_audit.get("concern_addressed")))
+                )
                 if turn.teacher_review is not None:
                     contract_checks.append(float(turn.teacher_review.valid))
                 else:
@@ -589,6 +594,7 @@ class EvaluationRunner:
                 action_types.append(action)
                 student_contexts.append(previous_response)
                 teacher_messages.append(message)
+                concern_handling_checks.append(float(not HybridTeachingAgent._student_concern(previous_response)))
                 response = student.respond(action, method, aligned)
                 record_checkpoint()
                 previous_response = response
@@ -656,6 +662,7 @@ class EvaluationRunner:
             "actionability": question_rate,
             "coherence": max(0.0, 1.0 - max(0, len(set(action_types)) - 4) * 0.1),
             "tutor_tone": supportive,
+            "student_question_handling": mean(concern_handling_checks) if concern_handling_checks else 0.0,
         }
         behavior_quality = mean(behavior_dimensions.values())
         posttest_item_scores = item_scores()
@@ -707,6 +714,7 @@ class EvaluationRunner:
             posttest_items=posttest_item_scores,
             single_step_contract_rate=round(mean(contract_checks) if contract_checks else 0.0, 3),
             context_continuity_rate=round(mean(continuity_checks) if continuity_checks else 0.0, 3),
+            student_question_handling_rate=round(mean(concern_handling_checks) if concern_handling_checks else 0.0, 3),
             option_validity_rate=round(mean(option_checks) if option_checks else 1.0, 3),
             llm_fallback_rate=round(fallback_count / max(1, len(selected)), 3),
             mean_latency_ms=round(mean(latency_samples) if latency_samples else 0.0, 1),
@@ -838,6 +846,9 @@ class EvaluationRunner:
                     "success_ci_high": round(success_high, 3),
                     "single_step_contract_rate": round(mean(item.single_step_contract_rate for item in items), 3),
                     "context_continuity_rate": round(mean(item.context_continuity_rate for item in items), 3),
+                    "student_question_handling_rate": round(
+                        mean(item.student_question_handling_rate for item in items), 3
+                    ),
                     "option_validity_rate": round(mean(item.option_validity_rate for item in items), 3),
                     "llm_fallback_rate": round(mean(item.llm_fallback_rate for item in items), 3),
                     "mean_latency_ms": round(mean(item.mean_latency_ms for item in items), 1),
@@ -1059,11 +1070,13 @@ class EvaluationRunner:
                 "",
                 "## Agent 质量门（自动 proxy）",
                 "",
-                "| 方法 | 单步契约 | 上下文连续 | 选项有效 | 证据映射 | 平均 LLM 调用 |",
-                "|---|---:|---:|---:|---:|---:|",
+                "| 方法 | 单步契约 | 上下文连续 | 学生疑问承接 | 选项有效 | 证据映射 | 平均 LLM 调用 |",
+                "|---|---:|---:|---:|---:|---:|---:|",
                 *[
                     f"| {item['method']} | {item.get('single_step_contract_rate', 0):.3f} | "
-                    f"{item.get('context_continuity_rate', 0):.3f} | {item.get('option_validity_rate', 0):.3f} | "
+                    f"{item.get('context_continuity_rate', 0):.3f} | "
+                    f"{item.get('student_question_handling_rate', 0):.3f} | "
+                    f"{item.get('option_validity_rate', 0):.3f} | "
                     f"{item.get('evidence_mapping_accuracy', 0):.3f} | {item.get('mean_llm_calls', 0):.2f} |"
                     for item in report.summary
                 ],

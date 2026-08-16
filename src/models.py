@@ -378,6 +378,7 @@ class MethodCaseResult(BaseModel):
     posttest_items: dict[str, float] = Field(default_factory=dict)
     single_step_contract_rate: float = 0.0
     context_continuity_rate: float = 0.0
+    student_question_handling_rate: float = 0.0
     option_validity_rate: float = 0.0
     llm_fallback_rate: float = 0.0
     mean_latency_ms: float = 0.0

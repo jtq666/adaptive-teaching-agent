@@ -596,6 +596,112 @@ class HybridTeachingAgent:
     def _simple_mode_enabled(self) -> bool:
         return bool(self.settings.get("simple_teaching_mode", False))
 
+    @staticmethod
+    def _student_concern(message: str) -> dict[str, str]:
+        """Extract a concrete learner question that must be answered first."""
+        text = re.sub(r"\s+", "", message or "")
+        if not text:
+            return {}
+        question_cues = (
+            "？", "?", "是不是", "是否", "为什么", "怎么", "到底", "算不算",
+            "有没有", "有吗", "能不能", "哪个", "什么",
+        )
+        uncertainty_cues = ("我不确定", "我有点不确定", "搞不清", "不明白", "不懂", "不清楚")
+        if not any(cue in text for cue in (*question_cues, *uncertainty_cues)):
+            return {}
+        if "合力" in text and any(cue in text for cue in ("零", "算不算", "有没有", "有吗")):
+            kind = "force_zero"
+        elif any(cue in text for cue in ("脚底", "摩擦力", "地板")):
+            kind = "foot_friction"
+        elif any(cue in text for cue in ("受到力", "有没有力", "到底有没有力", "受力")):
+            kind = "force_presence"
+        elif any(cue in text for cue in ("前倾", "向前", "往前")) and "为什么" in text:
+            kind = "inertia_forward"
+        else:
+            kind = "generic"
+        return {"kind": kind, "text": message.strip()}
+
+    @staticmethod
+    def _is_abstract_concern_question(question: str) -> bool:
+        text = re.sub(r"\s+", "", question or "")
+        return any(
+            cue in text
+            for cue in ("判断依据", "这一步", "当前关注点", "一个区别", "下一步推理", "只说明")
+        )
+
+    @staticmethod
+    def _is_generic_concern_answer(answer: str) -> bool:
+        text = re.sub(r"\s+", "", answer or "")
+        if len(text) < 6:
+            return True
+        return any(
+            cue in text
+            for cue in ("先把你刚才卡住的一个区别说清楚", "你的回答会作为我们继续学习的依据", "我们先一步一步来")
+        )
+
+    def _context_has_floor_friction(self, session: TeachingSession) -> bool:
+        context = "\n".join(turn.teacher_message for turn in session.turns)
+        return any(cue in context for cue in ("脚底", "地板", "摩擦力", "摩擦"))
+
+    def _concern_answer_is_sufficient(self, concern: dict[str, str], answer: str) -> bool:
+        text = re.sub(r"\s+", "", answer or "")
+        if self._is_generic_concern_answer(text):
+            return False
+        kind = concern.get("kind", "generic")
+        if kind == "force_zero":
+            return (
+                "合力" in text
+                and ("速度" in text or "加速度" in text)
+                and any(cue in text for cue in ("不为零", "不能为零", "不等于零", "不为0"))
+            )
+        if kind == "foot_friction":
+            return "摩擦" in text and any(cue in text for cue in ("脚", "地板", "地面"))
+        if kind == "force_presence":
+            return "力" in text and any(cue in text for cue in ("受到", "摩擦", "合力"))
+        if kind == "inertia_forward":
+            return any(cue in text for cue in ("惯性", "上半身", "前倾", "原来的速度"))
+        return True
+
+    def _concern_fallback_payload(
+        self,
+        session: TeachingSession,
+        concern: dict[str, str],
+        route_step: Any,
+    ) -> dict[str, str]:
+        """Create a short answer-first bridge when model output is too abstract."""
+        kind = concern.get("kind", "generic")
+        if kind == "force_zero" and self._context_has_floor_friction(session):
+            direct_answer = (
+                "先看速度变化：刹车时乘客的脚和下半身随车减速，说明乘客的运动状态在变化，"
+                "因此有加速度，乘客受到的合力不为零。"
+            )
+            question = "现在只判断：这个使乘客减速的水平力主要来自哪里？"
+        elif kind in {"force_zero", "force_presence", "foot_friction"}:
+            direct_answer = (
+                "要先区分题设。若题目明确说乘客没有受到水平方向的力，水平方向合力就是零；"
+                "若脚底和地板之间存在摩擦力，乘客就会受到向后的水平力，不能把两种情形混在一起。"
+            )
+            question = "当前情境中，题目有没有说明脚底和地板之间存在摩擦力？"
+        elif kind == "inertia_forward":
+            direct_answer = (
+                "前倾不是因为受到一个向前的推力，而是脚部先受到车地板的摩擦力并随车减速，"
+                "上半身暂时保持原来的向前运动状态。"
+            )
+            question = "现在只判断：前倾主要说明身体哪一部分没有立即跟着车减速？"
+        else:
+            direct_answer = "先回答你刚才提出的具体疑问，不急着进入下一步；关键要看当前情境中给出的受力和运动变化。"
+            focus = route_step.knowledge_point if route_step else self._focus_label(session)
+            question = f"关于“{focus}”，题目中哪一个条件最直接决定你的判断？"
+        return {
+            "student_concern": concern.get("text", ""),
+            "direct_answer": direct_answer,
+            "feedback": direct_answer,
+            "question": question,
+            "context": route_step.title if route_step else session.goal.topic,
+            "known_fact": "先回应学生的明确疑问，再提出一个最小判断问题",
+            "expected_signal": "学生能回答当前最小问题",
+        }
+
     def _decide_simple(self, session: TeachingSession, student_message: str, initial: bool) -> AgentDecision:
         """Run the small live-teaching loop used by the real-time UI.
 
@@ -735,25 +841,31 @@ class HybridTeachingAgent:
         previous_turn = session.turns[-1] if session.turns else None
         previous_question = previous_turn.teacher_message if previous_turn else "无"
         route_target = route_step.learning_target if route_step else session.state.next_focus or session.goal.objective
+        concern = self._student_concern(student_message)
         if self.llm.available:
             try:
                 data = self.llm.structured(
                     (
                         "你是一名真正和学生对话的教师。你的任务不是收集审计证据，而是帮助学生理解当前问题。"
+                        "如果学生上一句话包含明确疑问或不确定，必须先直接回答这个疑问，再提出一个最小追问；"
+                        "不能只说‘我们先澄清一下’，也不能把问题改写成抽象的‘判断依据’。"
                         "先根据学生上一句话给出一到两句直接、具体的反馈；如果学生困惑，先澄清困惑中的关键区别。"
                         "然后只提出一个学生可以回答的问题。反馈可以解释当前误解，但不要一次讲完整节课，"
                         "不要模拟学生，不要出现 Skill、路线、掌握度、证据、内部流程等词。"
                         "必须延续当前情境；学生已经回答正确时，承认正确并推进到下一个认知任务，不能换词重复原问题。"
                         "如果当前是迁移验证，必须换一个新情境。"
+                        "若学生问的是‘速度是否变化、是否有加速度、合力是否为零’，优先建立‘速度变化→有加速度→合力不为零’的链条；"
+                        "若当前情境已给出脚底与地板摩擦力，就不能回答成‘乘客没有水平力’。"
                     ),
                     (
                         f"课程：{session.goal.course}\n主题：{session.goal.topic}\n教学目标：{session.goal.objective}\n"
                         f"当前路线目标：{route_target}\n当前教学动作：{action_type}\n"
                         f"学生状态：{session.state.model_dump_json()}\n"
                         f"上一轮教师话语：{previous_question}\n学生刚才的话：{student_message or '尚未回答'}\n"
+                        f"学生明确疑问（若为空则没有）：{concern.get('text', '无')}\n"
                         "请输出反馈和一个问题。"
                     ),
-                    '{"feedback":"给学生的简短反馈或澄清","question":"唯一一个问题","context":"当前情境","known_fact":"本轮可用的已知条件","expected_signal":"希望学生表现出的理解"}',
+                    '{"student_concern":"学生明确提出的疑问或空字符串","direct_answer":"必须先回答该疑问；无明确疑问时可为空","feedback":"给学生的简短反馈或澄清","question":"唯一一个具体、可回答的问题","context":"当前情境","known_fact":"本轮可用的已知条件","expected_signal":"希望学生表现出的理解"}',
                     temperature=float(self.settings.get("temperature", 0.2)),
                 )
                 return self._build_simple_generation(session, data, action_type, student_message)
@@ -767,13 +879,31 @@ class HybridTeachingAgent:
         data: dict[str, Any],
         action_type: str,
         student_message: str = "",
+        enforce_concern: bool = True,
     ) -> MessageGeneration:
         route_step = session.teaching_route.current_step() if session.teaching_route else None
         focus = route_step.knowledge_point if route_step else self._focus_label(session)
-        feedback = str(data.get("feedback", "")).strip()
+        concern = self._student_concern(student_message)
+        direct_answer = str(data.get("direct_answer", "")).strip()
+        feedback = direct_answer if concern and direct_answer else str(data.get("feedback", "")).strip()
         question = str(data.get("question", "")).strip()
         if not question:
             raise ValueError("简单教师回复缺少问题")
+        if enforce_concern and concern and (
+            not direct_answer
+            or not self._concern_answer_is_sufficient(concern, direct_answer)
+            or self._is_abstract_concern_question(question)
+        ):
+            fallback = self._build_simple_generation(
+                session,
+                self._concern_fallback_payload(session, concern, route_step),
+                action_type,
+                student_message,
+                enforce_concern=False,
+            )
+            fallback.fallback_reason = "answer_first_concern_guard"
+            fallback.audit = {**(fallback.audit or {}), "fallback_reason": fallback.fallback_reason}
+            return fallback
         feedback = re.sub(r"[？?]+", "。", feedback).strip()
         if route_step is not None and route_step.kind == "transfer":
             prefix = "再换一个" if session.turns and session.turns[-1].action_type == "transfer" else "换一个"
@@ -783,7 +913,10 @@ class HybridTeachingAgent:
             previous_question = re.split(r"[。！？!?]\s*", previous.strip())[-1]
             similarity = SequenceMatcher(None, question, previous_question).ratio()
             if question in previous or previous_question in question or similarity >= 0.72:
-                if any(cue in student_message for cue in ("有没有受到力", "到底有没有力", "受到力")):
+                if concern:
+                    fallback_payload = self._concern_fallback_payload(session, concern, route_step)
+                    question = fallback_payload["question"]
+                elif any(cue in student_message for cue in ("有没有受到力", "到底有没有力", "受到力")):
                     question = "现在只判断：身体在水平方向是否受到向后的力"
                 else:
                     question = f"请只说明“{focus}”这一次最关键的一个区别"
@@ -822,6 +955,10 @@ class HybridTeachingAgent:
                 "action_type": action_type,
                 "llm_generated": True,
                 "student_facing_feedback": bool(feedback),
+                "student_concern": concern.get("text", ""),
+                "student_concern_kind": concern.get("kind", ""),
+                "answer_first": bool(concern),
+                "concern_addressed": bool(concern and direct_answer) or not concern,
             },
         )
 
@@ -833,12 +970,12 @@ class HybridTeachingAgent:
         student_message: str,
     ) -> MessageGeneration:
         focus = route_step.knowledge_point if route_step else self._focus_label(session)
-        if action_type == "transfer":
+        concern = self._student_concern(student_message)
+        if concern:
+            payload = self._concern_fallback_payload(session, concern, route_step)
+        elif action_type == "transfer":
             feedback = "前面的解释已经完成，现在换一个情境检查你能否迁移这个理解。"
             question = f"请换一个不同于刚才的新情境，说明“{focus}”如何表现？"
-        elif any(cue in student_message for cue in ("有没有受到力", "到底有没有力", "受到力")):
-            feedback = "这里要区分“有没有受到任何力”和“有没有受到水平方向的力”。身体可能仍受重力和支持力，但没有足以让它立即减速的向后水平力。"
-            question = "现在只判断：刹车瞬间，身体在水平方向受到的合力是什么？"
         elif action_type in {"diagnostic", "correction"}:
             feedback = "我们先把你刚才卡住的一个区别说清楚，再继续往下。"
             question = f"请只用一句话说明你对“{focus}”目前最确定的一个判断。"
@@ -846,18 +983,15 @@ class HybridTeachingAgent:
             feedback = "你的回答会作为我们继续学习的依据。"
             target = route_step.learning_target if route_step else f"说明“{focus}”"
             question = f"请用自己的话说明：{target}？"
-        return self._build_simple_generation(
-            session,
-            {
+        if not concern:
+            payload = {
                 "feedback": feedback,
                 "question": question,
                 "context": route_step.title if route_step else session.goal.topic,
                 "known_fact": "",
                 "expected_signal": "学生能回答当前问题",
-            },
-            action_type,
-            student_message,
-        )
+            }
+        return self._build_simple_generation(session, payload, action_type, student_message, enforce_concern=False)
 
     def _decide(self, session: TeachingSession, student_message: str, initial: bool) -> AgentDecision:
         if self._simple_mode_enabled():
@@ -1878,7 +2012,12 @@ class HybridTeachingAgent:
         interrogatives = ("为什么", "如何", "什么", "是否", "哪一个", "多少", "怎样")
         if len(clauses) >= 2:
             for index, clause in enumerate(clauses[:-1]):
-                if any(verb in clause for verb in task_verbs) and any(
+                # “这说明你已经理解……” is explanatory feedback, not a
+                # second request.  Strip that discourse use before looking
+                # for a task verb so a correct answer is not rejected as a
+                # multi-question turn.
+                task_clause = re.sub(r"(?:这|它|上述|这一点)(?:也|就|便)?说明", "", clause)
+                if any(verb in task_clause for verb in task_verbs) and any(
                     marker in later
                     for later in clauses[index + 1 :]
                     for marker in interrogatives

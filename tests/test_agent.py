@@ -90,6 +90,100 @@ def test_simple_teaching_flow_uses_a_new_situation_for_transfer(tmp_path):
     assert "换一个不同的新情境" in simplified.message
 
 
+def _make_physics_inputs():
+    goal = TeachingGoal(
+        course="大学物理",
+        topic="牛顿第一定律",
+        objective="区分维持运动和改变运动状态，理解合力与运动变化的关系",
+        knowledge_points=["惯性", "合力与运动变化", "惯性参考系"],
+    )
+    profile = StudentProfile(name="测试学生", level="基础薄弱", prior_knowledge=["速度"])
+    state = StudentState(
+        mastery={"惯性": 0.3, "合力与运动变化": 0.2, "惯性参考系": 0.2},
+        next_focus="惯性",
+    )
+    return goal, profile, state
+
+
+def test_answer_first_bridge_responds_to_force_concern_and_keeps_facts_consistent(tmp_path):
+    agent = make_agent(tmp_path, simple_teaching_mode=True)
+    session = agent.start_session(*_make_physics_inputs())
+    session.turns[-1].teacher_message = (
+        "刹车时车受到向后的制动力；乘客脚底与车地板之间有摩擦力，"
+        "使乘客下半身随车减速。"
+    )
+    subject = agent.library.get("newtons_first_law_via_engineering_examples_v1")
+    message = "我有点不确定，乘客上半身还在前，那合力到底算不算？是不是脚底有摩擦力？"
+
+    generation = agent._generate_simple_teacher_message(
+        session,
+        subject,
+        agent.library.get("diagnostic_questioning_v1"),
+        "diagnostic",
+        message,
+    )
+
+    assert "速度变化" in generation.message
+    assert "加速度" in generation.message
+    assert "合力不为零" in generation.message
+    assert "判断依据" not in generation.message
+    assert generation.message.count("？") + generation.message.count("?") == 1
+    assert generation.audit["answer_first"] is True
+    assert generation.audit["concern_addressed"] is True
+
+
+def test_answer_first_guard_repairs_abstract_llm_draft(tmp_path):
+    class AbstractDraftClient:
+        available = True
+
+        def structured(self, *args, **kwargs):
+            return {
+                "feedback": "我们先把你刚才卡住的一个区别说清楚，再继续。",
+                "question": "只说明“合力与运动变化”这一步的一个判断依据？",
+                "context": "公交车急刹车",
+                "known_fact": "刹车时车减速",
+                "expected_signal": "学生能回答当前问题",
+            }
+
+    agent = HybridTeachingAgent(
+        library=SkillLibrary(),
+        llm=AbstractDraftClient(),
+        store=SessionStore(tmp_path),
+        settings={"simple_teaching_mode": True, "max_rounds": 8, "mastery_threshold": 0.8},
+    )
+    session = agent.start_session(*_make_physics_inputs())
+    session.turns[-1].teacher_message = "脚底与车地板之间有摩擦力，使乘客下半身随车减速。"
+    subject = agent.library.get("newtons_first_law_via_engineering_examples_v1")
+    generation = agent._generate_simple_teacher_message(
+        session,
+        subject,
+        agent.library.get("diagnostic_questioning_v1"),
+        "diagnostic",
+        "合力到底算不算零？是不是脚底有摩擦力？",
+    )
+
+    assert generation.fallback_reason == "answer_first_concern_guard"
+    assert "速度变化" in generation.message
+    assert "只说明“合力与运动变化”" not in generation.message
+
+
+def test_answer_first_bridge_does_not_invent_friction_when_prompt_excludes_horizontal_force(tmp_path):
+    agent = make_agent(tmp_path, simple_teaching_mode=True)
+    session = agent.start_session(*_make_physics_inputs())
+    session.turns[-1].teacher_message = "按当前题设，乘客没有受到任何水平方向的推力或拉力。"
+    subject = agent.library.get("newtons_first_law_via_engineering_examples_v1")
+    generation = agent._generate_simple_teacher_message(
+        session,
+        subject,
+        agent.library.get("diagnostic_questioning_v1"),
+        "diagnostic",
+        "合力到底算不算零？是不是脚底有摩擦力？",
+    )
+
+    assert "两种情形混在一起" in generation.message
+    assert "题目有没有说明脚底和地板之间存在摩擦力" in generation.message
+
+
 def test_public_agent_uses_four_internal_roles_and_one_audited_output(tmp_path):
     agent = make_agent(tmp_path)
     assert isinstance(agent.diagnosis_role, StudentDiagnosisRole)
