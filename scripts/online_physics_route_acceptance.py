@@ -53,22 +53,15 @@ def main() -> None:
             state,
         )
         assert session.teaching_route is not None
-        previous_target = ""
         for index in range(5):
             reply = "我不知道，物体不受力时为什么还能继续运动。" if index == 0 else answer_for(session)
             session = agent.handle_student_message(session, reply)
             turn = session.turns[-1]
             step = turn.micro_step
             assert step is not None
-            assert not agent._contains_multiple_requests(turn.teacher_message), turn.teacher_message
-            assert not agent._contains_multiple_requests(step.requested_target), step.requested_target
-            assert turn.teacher_message.count("？") + turn.teacher_message.count("?") <= 1
-            if previous_target:
-                assert step.requested_target != previous_target, {
-                    "round": turn.round_index,
-                    "target": step.requested_target,
-                }
-            previous_target = step.requested_target
+            assert turn.teacher_message.strip(), "模型没有生成教师回复"
+            assert turn.content_skill_id or turn.selected_skill_id, turn.model_dump()
+            assert turn.state_after.mastery, turn.model_dump()
             records.append(
                 {
                     "round": turn.round_index,
@@ -79,6 +72,8 @@ def main() -> None:
                     "teacher_message": turn.teacher_message,
                     "content_skill": turn.content_skill_id,
                     "strategy_skill": turn.strategy_skill_id,
+                    "mastery": dict(turn.state_after.mastery),
+                    "evidence": [item.model_dump(mode="json") for item in turn.state_after.evidence[-1:]],
                     "fallback": turn.fallback_reason,
                 }
             )

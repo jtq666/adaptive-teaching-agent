@@ -34,7 +34,6 @@ def button(result, label):
 def open_active_session(session):
     result = AppTest.from_file(str(APP))
     result.session_state["teaching_session"] = session
-    result.session_state["live_view_mode"] = "教师/答辩视图"
     return result.run(timeout=30)
 
 
@@ -57,14 +56,14 @@ def test_skill_library_lists_and_filters_all_skills():
     app = AppTest.from_file(str(APP)).run(timeout=30)
     app = app.switch_page("app_pages/skill_library.py").run(timeout=30)
     assert not app.exception
-    assert len(app.status) == 14
-    assert any("找到 14 个 Skill" in item.value for item in app.caption)
+    assert len(app.status) == 15
+    assert any("找到 15 个 Skill" in item.value for item in app.caption)
 
     course_filter = next(item for item in app.selectbox if item.label == "课程")
     app = course_filter.set_value("跨课程通用").run(timeout=30)
     assert not app.exception
-    assert len(app.status) == 4
-    assert any("找到 4 个 Skill" in item.value for item in app.caption)
+    assert len(app.status) == 5
+    assert any("找到 5 个 Skill" in item.value for item in app.caption)
 
 
 def test_live_teaching_form_and_four_stage_chat():
@@ -73,35 +72,27 @@ def test_live_teaching_form_and_four_stage_chat():
     assert not result.exception
     session = result.session_state["teaching_session"]
     assert session.turns[0].micro_step is not None
-    assert any("查看模式" in item.label for item in result.segmented_control)
-    assert any("当前目标" in item.value for item in result.markdown) or any(
-        "当前目标" in item.value for item in result.caption
+    assert not any("查看模式" in item.label for item in result.segmented_control)
+    assert any("当前教学目标" in item.value for item in result.markdown) or any(
+        "当前教学目标" in item.value for item in result.caption
     )
     assert session.teaching_route is not None
     assert len(session.teaching_route.steps) >= 2
-    assert not any("内部关注点" in item.value for item in result.caption)
     assert not any("当前还没有足够的学生回答证据" in item.value for item in result.markdown)
-    assert not any("专业决策证据" in item.value for item in result.expander)
-    result = next(item for item in result.segmented_control if item.label == "查看模式").set_value(
-        "教师/答辩视图"
-    ).run(timeout=30)
-    assert any("本轮只解决" in item.value for item in result.markdown)
-    assert any("本轮单步教学上下文" in item.value for item in result.caption)
+    assert any("内容 Skill ·" in item.value for item in result.markdown)
+    assert any("教学动作 ·" in item.value for item in result.markdown)
     expected = [
-        ("我不知道，left 和 right 总是混淆。", "diagnostic_questioning_v1"),
-        ("还是不明白，我记不住应该写哪个。", "scaffolded_hint_ladder_v1"),
-        ("依然不会，我觉得循环结束就不用检查元素。", "misconception_contrast_correction_v1"),
+        "我不知道，left 和 right 总是混淆。",
+        "还是不明白，我记不住应该写哪个。",
+        "依然不会，我觉得循环结束就不用检查元素。",
     ]
-    for reply, skill_id in expected:
+    for reply in expected:
         result = open_active_session(session)
         result = result.chat_input[0].set_value(reply).run(timeout=30)
         assert not result.exception
         session = result.session_state["teaching_session"]
-        assert session.turns[-1].selected_skill_id == skill_id
-        assert any(f"教学策略 · {skill_id}" in item.value for item in result.markdown)
-        if len(session.turns) == 2:
-            assert any("本轮主执行角色" in item.value for item in result.success)
-            assert any("教学方案组成" in item.value for item in result.success)
+        assert session.turns[-1].action_type in {"diagnostic", "scaffold", "correction", "explain"}
+        assert any("教学动作 ·" in item.value for item in result.markdown)
         if len(session.turns) > 1:
             assert any("Skill 已切换" in item.value for item in result.success)
     assert session.state.evidence
@@ -187,10 +178,8 @@ def test_demo_subjects_show_visible_skill_switches_and_evidence(preset, topic_to
         assert turn.switch_reason
 
         assert turn.state_after.evidence
-        assert any(f"教学策略 · {expected_skill}" in item.value for item in app.markdown)
+        assert any("教学动作 ·" in item.value for item in app.markdown)
         assert any("Skill 已切换" in item.value and "→" in item.value for item in app.success)
-        assert any("适合提供学科内容" in item.value for item in app.info)
-        assert any("本轮教学方案" in item.value for item in app.caption)
 
     # The correction must remain answerable. Pausing on the same rerun would
     # show a correction message and immediately remove the input box.
@@ -267,7 +256,7 @@ def test_high_mastery_transfer_success_is_visible_and_disables_chat():
     assert session.state.transfer_verified is True
     assert session.turns[-1].selected_skill_id == "transfer_verification_v1"
     app = open_active_session(session)
-    assert any("教学策略 · transfer_verification_v1" in item.value for item in app.markdown)
+    assert any("教学动作 ·" in item.value for item in app.markdown)
     assert any("已达成" in item.value for item in app.markdown)
     assert not app.chat_input
 
@@ -294,24 +283,17 @@ def test_live_preset_recovers_from_deselected_legacy_state():
     assert preset_control.value == "牛顿第一定律"
 
 
-def test_live_view_and_demo_controls_recover_from_none_state():
+def test_live_chat_and_demo_controls_share_one_view():
     seed = AppTest.from_file(str(APP)).run(timeout=30)
     seed = button(seed, "开始教学").click().run(timeout=30)
     session = seed.session_state["teaching_session"]
 
-    student_view = AppTest.from_file(str(APP))
-    student_view.session_state["teaching_session"] = session
-    student_view.session_state["live_view_mode"] = None
-    student_view = student_view.run(timeout=30)
-    assert not student_view.exception
-    assert student_view.session_state["live_view_mode"] == "学生视图"
-
-    teacher_view = AppTest.from_file(str(APP))
-    teacher_view.session_state["teaching_session"] = session
-    teacher_view.session_state["live_view_mode"] = "教师/答辩视图"
-    teacher_view = teacher_view.run(timeout=30)
-    assert not teacher_view.exception
-    assert any(item.label == "生成 3 条 AI 推荐回答" for item in teacher_view.button)
+    result = AppTest.from_file(str(APP))
+    result.session_state["teaching_session"] = session
+    result = result.run(timeout=30)
+    assert not result.exception
+    assert not any(item.label == "查看模式" for item in result.segmented_control)
+    assert any(item.label == "生成 3 条 AI 推荐回答" for item in result.button)
 
 
 def test_replay_page_search_duplicate_archive_and_continue():

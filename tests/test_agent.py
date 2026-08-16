@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from src.agent import HybridTeachingAgent, MessageGeneration
+from src.agent import HybridTeachingAgent
 from src.llm import LLMUnavailableError, OpenAICompatibleClient
 from src.models import (
     ResponseOption,
@@ -64,30 +64,6 @@ def test_start_session_selects_subject_and_diagnostic_support(tmp_path):
     assert session.turns[0].decision_mode in {"rule_fallback", "rule_margin_selection", "llm_semantic_selection"}
     assert session.turns[0].candidate_skill_ids
     assert (tmp_path / f"{session.session_id}.json").exists()
-
-
-def test_simple_teaching_flow_uses_a_new_situation_for_transfer(tmp_path):
-    agent = make_agent(tmp_path, simple_teaching_mode=True)
-    session = agent.start_session(*make_inputs())
-    session.teaching_route.current_index = len(session.teaching_route.steps) - 1
-    session.state.evidence.append(
-        StateEvidence(
-            student_quote="物体会保持原来的运动状态",
-            knowledge_point="区间定义",
-            signal_type="positive",
-            evidence_level="correct",
-        )
-    )
-    generated = MessageGeneration(
-        message="旧问题？",
-        micro_step=session.turns[-1].micro_step,
-    )
-
-    simplified = agent._apply_simple_teaching_flow(session, generated)
-
-    assert simplified.micro_step is not None
-    assert "新情境" in simplified.micro_step.requested_target
-    assert "换一个不同的新情境" in simplified.message
 
 
 def _make_physics_inputs():
@@ -414,7 +390,7 @@ def test_session_persists_content_strategy_phase_and_skill_snapshot(tmp_path):
     assert session.imported_history
     assert session.skill_snapshot[turn.content_skill_id]
     restored = agent.store.load(session.session_id)
-    assert restored.schema_version == 5
+    assert restored.schema_version == 6
     assert restored.turns[0].skill_plan == turn.skill_plan
 
 

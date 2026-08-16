@@ -9,6 +9,8 @@ agent:
   scaffold_after_rounds: 2
   correction_after_rounds: 3
   temperature: 0.20
+  # Keep each live teacher turn readable on the chat screen.
+  live_teacher_max_chars: 100
   evaluation_seed: 20260809
   candidate_limit: 5
   semantic_selector_margin: 0.05

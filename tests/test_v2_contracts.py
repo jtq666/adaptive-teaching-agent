@@ -263,7 +263,7 @@ def test_store_atomic_parallel_writes_have_valid_json(tmp_path):
         list(pool.map(store.save, sessions))
     for session in sessions:
         payload = json.loads((tmp_path / f"{session.session_id}.json").read_text(encoding="utf-8"))
-        assert payload["schema_version"] == 5
+        assert payload["schema_version"] == 6
 
 
 def test_legacy_session_migrates_without_semantic_mutation(tmp_path):
@@ -273,5 +273,5 @@ def test_legacy_session_migrates_without_semantic_mutation(tmp_path):
     payload.pop("display_title")
     (tmp_path / f"{session.session_id}.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     loaded = SessionStore(tmp_path).load(session.session_id)
-    assert loaded.schema_version == 5
+    assert loaded.schema_version == 6
     assert loaded.display_title == loaded.goal.topic

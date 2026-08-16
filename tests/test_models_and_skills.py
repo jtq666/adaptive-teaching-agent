@@ -23,10 +23,11 @@ def test_goal_requires_knowledge_points():
 
 def test_library_contains_original_and_adaptive_skills():
     library = SkillLibrary()
-    assert len(library.skills) == 14
+    assert len(library.skills) == 15
     assert len(library.by_type("subject")) == 10
     assert library.get("diagnostic_questioning_v1").skill_type == "diagnostic"
     assert library.get("transfer_verification_v1").added_reason
+    assert library.get("adaptive_teaching_v1").skill_type == "strategy"
 
 
 def test_skill_yaml_import_validates_and_never_overwrites(tmp_path):

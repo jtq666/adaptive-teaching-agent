@@ -10,6 +10,7 @@ from src.skills import SkillLibrary
 from src.storage import EvaluationStore, SessionStore
 
 ACTION_LABELS = {
+    "explain": "内容讲解",
     "subject_instruction": "学科讲解",
     "diagnostic": "诊断提问",
     "scaffold": "分层提示",

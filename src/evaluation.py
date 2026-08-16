@@ -498,7 +498,16 @@ class EvaluationRunner:
 
         if method == METHODS[0]:
             offline_llm = OpenAICompatibleClient(settings={"api_key": "", "model": "offline"})
-            agent = HybridTeachingAgent(library=self.library, llm=offline_llm, store=_NoOpSessionStore())
+            # The benchmark is a frozen strategy simulation. Keep it on the
+            # legacy deterministic evaluator path; the live demo uses the
+            # single-LLM adaptive path and is validated separately online.
+            evaluation_settings = {**self.settings, "simple_teaching_mode": False}
+            agent = HybridTeachingAgent(
+                library=self.library,
+                llm=offline_llm,
+                store=_NoOpSessionStore(),
+                settings=evaluation_settings,
+            )
             session = agent.start_session(case.goal, case.profile, predicted_state)
             for _ in range(int(self.settings.get("max_rounds", 8))):
                 turn = session.turns[-1]

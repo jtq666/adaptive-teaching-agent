@@ -8,6 +8,7 @@ from src.ui import get_library, page_header
 
 TYPE_LABELS = {
     "subject": "学科教学",
+    "strategy": "自适应教学",
     "diagnostic": "诊断提问",
     "scaffold": "分层提示",
     "correction": "误解纠正",
@@ -64,7 +65,7 @@ generic_count = len(library.skills) - subject_count
 
 page_header(
     "Skill Library",
-    "查看 Agent 的教学工具箱：学科 Skill 提供内容依据，通用 Skill 决定教学策略。",
+    "查看 Agent 的教学工具箱：学科 Skill 提供内容依据，统一自适应 Skill 选择本轮教学动作。",
     eyebrow=f"{len(library.skills)} 个当前可用 Skill · 来源、触发条件与版本可审计",
     icon="library_books",
 )
@@ -75,8 +76,8 @@ with st.container(horizontal=True):
     st.metric("通用自适应", generic_count, border=True)
 
 st.info(
-    "使用方式：Agent 先从学科 Skill 中确定内容依据；当学生困惑、停滞或准备迁移时，"
-    "再切换到诊断、提示、纠错或迁移 Skill。",
+    "实时教学只使用 adaptive_teaching_v1：模型根据学生原话选择讲解、诊断、分层提示、"
+    "误解纠正或迁移验证。旧的策略 Skill 仅为历史会话和评估数据保留。",
     icon=":material/account_tree:",
 )
 

@@ -1,0 +1,45 @@
+skill_id: adaptive_teaching_v1
+name: 自适应教学
+version: '1.0'
+trigger:
+  - 学生回答后
+  - 学生表达困惑
+  - 需要检验迁移
+preconditions:
+  - 已有当前教学目标与对话上下文
+goal:
+  - 根据学生原话选择下一步教学动作
+  - 保持内容 Skill 与教学动作分离
+procedure:
+  - 结合当前知识点、学生回答和历史上下文判断理解情况
+  - 在 explain、diagnose、scaffold、correct、transfer 中选择一个动作
+  - 生成一段简短、自然、只推进一个问题的教师回复
+teacher_actions:
+  - explain：围绕当前知识点讲清一个关键关系
+  - diagnose：定位学生真正卡住的地方
+  - scaffold：只给下一步可执行提示
+  - correct：纠正已确认的错误概念并让学生重述
+  - transfer：更换情境检验同一原理
+student_signals:
+  - 能用自己的话回答当前问题
+  - 能说明判断依据
+  - 能在新情境中应用同一原理
+failure_modes:
+  - 把表达困惑当成概念误解
+  - 连续重复同一个问题
+  - 一次回复包含多个教学任务
+verification:
+  - 回复与当前内容 Skill 一致
+  - 回复只包含一个主要问题
+  - 动作与学生当前困难相匹配
+added_reason: 将多个互相竞争的策略 Skill 合并为一个自适应教学 Skill，由模型在单次输出中选择内部动作。
+applicable_when:
+  - 所有实时教学回合
+courses: []
+topic_tags: []
+required_topic_tags: []
+trigger_states: []
+required_prior_knowledge: []
+skill_type: strategy
+action_type: adaptive_teaching
+mastery_range: [0.0, 1.0]

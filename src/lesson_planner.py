@@ -21,8 +21,8 @@ class LessonPlanner:
     def __init__(self, llm: OpenAICompatibleClient):
         self.llm = llm
 
-    def build(self, goal: TeachingGoal) -> TeachingRoute:
-        if self.llm.available:
+    def build(self, goal: TeachingGoal, *, allow_llm: bool = True) -> TeachingRoute:
+        if allow_llm and self.llm.available:
             try:
                 data = self.llm.structured(
                     (

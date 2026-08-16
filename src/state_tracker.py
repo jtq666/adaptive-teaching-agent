@@ -130,6 +130,44 @@ class StateTracker:
         if settings:
             self.settings.update(settings)
 
+    @staticmethod
+    def _finalize_difficulty(
+        assessment: StateAssessment,
+        state: StudentState,
+        previous_teacher_message: str,
+        student_message: str,
+    ) -> StateAssessment:
+        """Apply only safety boundaries to the model's difficulty judgment.
+
+        The model owns the semantic classification.  The program does not
+        infer a difficulty from words such as ``为什么`` or from subject
+        symbols.  It only prevents a correction route when the model has not
+        explicitly confirmed a wrong student model.
+        """
+
+        generic_failure = "当前知识点尚未形成可观察理解"
+        explicit_misconception = bool(assessment.explicit_misconception) and any(
+            item.label != generic_failure and item.count > 0
+            for item in assessment.misconceptions
+        )
+        assessment.explicit_misconception = explicit_misconception
+        if assessment.difficulty_type == "unknown":
+            if explicit_misconception:
+                assessment.difficulty_type = "concept_misconception"
+
+        if assessment.difficulty_type == "concept_misconception" and not explicit_misconception:
+            assessment.difficulty_type = "unknown"
+
+        if assessment.difficulty_type in {"symbol_notation", "calculation", "task_comprehension"}:
+            assessment.recommended_strategy = "scaffold"
+        elif assessment.difficulty_type == "concept_misconception" and explicit_misconception:
+            assessment.recommended_strategy = "correction"
+        elif assessment.recommended_strategy == "correction" and not explicit_misconception:
+            assessment.recommended_strategy = "scaffold" if has_negative_signal(student_message) else "diagnostic"
+        elif assessment.recommended_strategy == "subject" and has_negative_signal(student_message):
+            assessment.recommended_strategy = "diagnostic"
+        return assessment
+
     def _level_for(self, assessment: StateAssessment, point: str) -> EvidenceLevel:
         level = assessment.evidence_levels.get(point, "")
         if level in self.EVIDENCE_LEVELS:
@@ -235,9 +273,11 @@ class StateTracker:
         round_index: int = 0,
         previous_teacher_message: str = "",
         active_knowledge_point: str = "",
+        assessment: StateAssessment | None = None,
     ) -> StudentState:
         before = deepcopy(state)
-        assessment = self._assess(
+        model_assessment = assessment is not None
+        assessment = assessment or self._assess(
             goal,
             profile,
             state,
@@ -277,7 +317,7 @@ class StateTracker:
         # provider may time out or return an inconsistent intermediate review;
         # a clear contrastive correction with shared context must still be
         # allowed to resolve the active misconception deterministically.
-        if self._has_generic_repair_evidence(state, student_message):
+        if not model_assessment and self._has_generic_repair_evidence(state, student_message):
             active_points = [
                 item.knowledge_point
                 for item in state.misconception_states
@@ -342,6 +382,11 @@ class StateTracker:
             level, delta = self._delta_for(assessment, point, previous_knowledge, quote, old)
             evidence_by_point[point] = (level, delta)
             updated.mastery[point] = round(max(0.0, min(1.0, old + delta)), 3)
+            if model_assessment and point in assessment.mastery_updates:
+                updated.mastery[point] = round(
+                    max(0.0, min(1.0, float(assessment.mastery_updates[point]))),
+                    3,
+                )
 
         signal_type: Literal["positive", "partial", "negative", "empty", "transfer"] = (
             "empty" if not quote else "transfer" if assessment.verification_passed else
@@ -428,6 +473,12 @@ class StateTracker:
                 )
             )
         updated.misconception_states = misconception_states
+        updated.current_difficulty = assessment.difficulty_type
+        updated.recommended_strategy = assessment.recommended_strategy
+        updated.misconception_confirmed = bool(
+            assessment.explicit_misconception
+            and any(item.label != "当前知识点尚未形成可观察理解" and item.count > 0 for item in assessment.misconceptions)
+        )
         updated.understanding_signals = assessment.understanding_signals
         updated.next_focus = assessment.next_focus or updated.next_focus
         updated.transfer_verified = updated.transfer_verified or assessment.verification_passed
@@ -454,16 +505,21 @@ class StateTracker:
             min(5, int(self.settings.get("state_review_call_budget", 2))),
         )
         if has_prompt_injection(message):
-            return StateAssessment(
-                mastery_updates=dict(state.mastery),
-                misconceptions=[],
-                understanding_signals=["检测到与学习任务无关的指令文本，未作为掌握证据"],
-                next_focus=state.next_focus,
-                verification_passed=False,
-                progress="unchanged",
-                affected_points=[],
-                confidence=0.95,
-                evidence_reason="提示注入守卫：忽略元指令，只保留教学任务",
+            return self._finalize_difficulty(
+                StateAssessment(
+                    mastery_updates=dict(state.mastery),
+                    misconceptions=[],
+                    understanding_signals=["检测到与学习任务无关的指令文本，未作为掌握证据"],
+                    next_focus=state.next_focus,
+                    verification_passed=False,
+                    progress="unchanged",
+                    affected_points=[],
+                    confidence=0.95,
+                    evidence_reason="提示注入守卫：忽略元指令，只保留教学任务",
+                ),
+                state,
+                previous_teacher_message,
+                message,
             )
         if self.llm and self.llm.available:
             try:
@@ -479,6 +535,13 @@ class StateTracker:
                         "partial 表示方向部分正确，correct 表示正确回答当前问题，explained 表示说明了依据或纠正了误解，"
                         "transfer 表示在新情境中独立应用。如果学生没有逐字复述教师问题，但明确解释了当前活动"
                         "知识点或纠正了已有误解，也应判为 improved。掌握度数值只是兼容字段，必须以证据等级作为更新依据。"
+                        "同时判断学生当前最主要的困难类型：concept_misconception 只能用于明确表达的概念冲突；"
+                        "symbol_notation 用于看不懂公式、变量、符号或表达式；calculation 用于代入、化简或计算卡住；"
+                        "task_comprehension 用于没有理解题目要求；无法判断时用 unknown。"
+                        "另请返回 explicit_misconception：只有学生自己的回答明确断言了错误的概念关系时才为 true；"
+                        "学生提问、表达困惑、说‘我不会’或‘我看不懂’都必须为 false。"
+                        "根据困难类型推荐一个策略：subject、diagnostic、scaffold、correction 或 transfer。"
+                        "‘我不会’或‘我看不懂’本身不是概念误解，优先推荐 diagnostic 或 scaffold。"
                     ),
                     (
                         f"教学目标：{goal.model_dump_json()}\n学生画像：{profile.model_dump_json()}\n"
@@ -492,7 +555,10 @@ class StateTracker:
                         '"understanding_signals":["信号"],"next_focus":"下一关注点",'
                         '"verification_passed":false,"progress":"improved|unchanged|regressed",'
                         '"affected_points":["只能填写教学目标中的知识点"],'
-                        '"confidence":0到1,"evidence_reason":"判断依据"}'
+                        '"confidence":0到1,"evidence_reason":"判断依据",'
+                        '"explicit_misconception":false,'
+                        '"difficulty_type":"concept_misconception|symbol_notation|calculation|task_comprehension|unknown",'
+                        '"recommended_strategy":"subject|diagnostic|scaffold|correction|transfer"}'
                     ),
                 )
                 assessment = StateAssessment.model_validate(data)
@@ -557,7 +623,7 @@ class StateTracker:
                     ]
                     assessment.understanding_signals = ["学生明确表达无法继续当前问题"]
                     assessment.evidence_reason = "学生明确表达无法继续当前问题，暂不将其视为中性证据"
-                    return assessment
+                    return self._finalize_difficulty(assessment, state, previous_teacher_message, message)
                 if not assessment.affected_points and message.strip() and previous_teacher_message.strip():
                     focus = (
                         state.next_focus
@@ -1093,10 +1159,15 @@ class StateTracker:
                         "回答尚不充分，暂不判定为退步"
                     ]
                     assessment.evidence_reason = assessment.evidence_reason or "回答不完整，但没有明确错误或无法作答证据"
-                return assessment
+                return self._finalize_difficulty(assessment, state, previous_teacher_message, message)
             except (LLMUnavailableError, ValueError, TypeError):
                 pass
-        return self._heuristic_assessment(goal, state, message)
+        return self._finalize_difficulty(
+            self._heuristic_assessment(goal, state, message),
+            state,
+            previous_teacher_message,
+            message,
+        )
 
     @staticmethod
     def _heuristic_assessment(goal: TeachingGoal, state: StudentState, message: str) -> StateAssessment:

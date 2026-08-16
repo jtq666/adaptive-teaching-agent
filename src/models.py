@@ -23,6 +23,15 @@ ResponsePreference = Literal["auto", "open", "single_choice", "fill_blank", "num
 TeachingPhase = Literal["diagnosis", "instruction", "practice", "repair", "transfer", "completed", "paused"]
 RouteStepStatus = Literal["pending", "active", "completed"]
 RouteStepKind = Literal["knowledge", "transfer"]
+DifficultyType = Literal[
+    "concept_misconception",
+    "symbol_notation",
+    "calculation",
+    "task_comprehension",
+    "unknown",
+]
+StrategyRecommendation = Literal["subject", "diagnostic", "scaffold", "correction", "transfer"]
+TeachingAction = Literal["explain", "diagnose", "scaffold", "correct", "transfer"]
 
 
 class TeachingGoal(BaseModel):
@@ -84,6 +93,9 @@ class StudentState(BaseModel):
     evidence: list[StateEvidence] = Field(default_factory=list)
     misconception_states: list[MisconceptionState] = Field(default_factory=list)
     phase: TeachingPhase = "diagnosis"
+    current_difficulty: DifficultyType = "unknown"
+    recommended_strategy: StrategyRecommendation = "subject"
+    misconception_confirmed: bool = False
 
     @field_validator("mastery")
     @classmethod
@@ -247,6 +259,7 @@ class AgentDecision(BaseModel):
     skill_plan: SkillPlan | None = None
     question_contract: QuestionContract | None = None
     llm_trace: list[LLMCallTrace] = Field(default_factory=list)
+    difficulty_type: DifficultyType = "unknown"
 
 
 class ConversationTurn(BaseModel):
@@ -277,13 +290,14 @@ class ConversationTurn(BaseModel):
     question_contract: QuestionContract | None = None
     generation_revisions: list[GenerationRevision] = Field(default_factory=list)
     llm_trace: list[LLMCallTrace] = Field(default_factory=list)
+    difficulty_type: DifficultyType = "unknown"
 
 
 class TeachingSession(BaseModel):
     model_config = ConfigDict(use_enum_values=True, validate_default=True)
 
     session_id: str = Field(default_factory=lambda: uuid4().hex[:12])
-    schema_version: int = Field(default=5, ge=1)
+    schema_version: int = Field(default=6, ge=1)
     display_title: str = ""
     archived_at: str | None = None
     deleted_at: str | None = None
@@ -322,6 +336,144 @@ class StateAssessment(BaseModel):
     )
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     evidence_reason: str = ""
+    # This is a compact model judgment, not a phrase-matching rule.  It is
+    # true only when the student's own answer contains a clear wrong model.
+    explicit_misconception: bool = False
+    difficulty_type: DifficultyType = "unknown"
+    recommended_strategy: StrategyRecommendation = "subject"
+
+    @field_validator("difficulty_type", mode="before")
+    @classmethod
+    def normalize_difficulty_type(cls, value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "概念误解": "concept_misconception",
+            "概念": "concept_misconception",
+            "误解": "concept_misconception",
+            "符号困难": "symbol_notation",
+            "公式困难": "symbol_notation",
+            "符号": "symbol_notation",
+            "公式": "symbol_notation",
+            "计算困难": "calculation",
+            "计算": "calculation",
+            "代入": "calculation",
+            "题意不清": "task_comprehension",
+            "题目理解": "task_comprehension",
+            "题意": "task_comprehension",
+            "不确定": "unknown",
+            "未知": "unknown",
+        }
+        return aliases.get(raw, raw if raw in {
+            "concept_misconception",
+            "symbol_notation",
+            "calculation",
+            "task_comprehension",
+            "unknown",
+        } else "unknown")
+
+    @field_validator("recommended_strategy", mode="before")
+    @classmethod
+    def normalize_recommended_strategy(cls, value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "内容讲解": "subject",
+            "学科讲解": "subject",
+            "自主讲解": "subject",
+            "诊断提问": "diagnostic",
+            "分层提示": "scaffold",
+            "误解纠正": "correction",
+            "迁移验证": "transfer",
+        }
+        return aliases.get(raw, raw if raw in {
+            "subject",
+            "diagnostic",
+            "scaffold",
+            "correction",
+            "transfer",
+        } else "subject")
+
+
+class AdaptiveTurnOutput(BaseModel):
+    """The single model output used by the live teaching path.
+
+    It deliberately combines diagnosis, content selection, teaching action
+    and student-facing language.  The application stores this result and
+    only validates the selected content Skill before displaying it.
+    """
+
+    content_skill: str = ""
+    teaching_action: TeachingAction = "explain"
+    difficulty: DifficultyType = "unknown"
+    explicit_misconception: bool = False
+    evidence: str = ""
+    mastery: float = Field(default=0.3, ge=0.0, le=1.0)
+    progress: Literal["improved", "unchanged", "regressed"] = "unchanged"
+    affected_points: list[str] = Field(default_factory=list)
+    evidence_level: Literal["none", "partial", "correct", "explained", "transfer"] = "none"
+    verification_passed: bool = False
+    misconceptions: list[Misconception] = Field(default_factory=list)
+    reply: str = ""
+    question: str = ""
+
+    @field_validator("misconceptions", mode="before")
+    @classmethod
+    def normalize_misconceptions(cls, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return []
+        return [item if isinstance(item, dict) else {"label": str(item)} for item in value]
+
+    @field_validator("teaching_action", mode="before")
+    @classmethod
+    def normalize_teaching_action(cls, value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "subject": "explain",
+            "subject_instruction": "explain",
+            "explain": "explain",
+            "内容讲解": "explain",
+            "学科讲解": "explain",
+            "diagnostic": "diagnose",
+            "诊断提问": "diagnose",
+            "scaffold": "scaffold",
+            "分层提示": "scaffold",
+            "correction": "correct",
+            "correct": "correct",
+            "误解纠正": "correct",
+            "transfer": "transfer",
+            "迁移验证": "transfer",
+        }
+        return aliases.get(raw, raw if raw in {"explain", "diagnose", "scaffold", "correct", "transfer"} else "explain")
+
+    @field_validator("difficulty", mode="before")
+    @classmethod
+    def normalize_difficulty(cls, value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "概念误解": "concept_misconception",
+            "概念": "concept_misconception",
+            "误解": "concept_misconception",
+            "符号困难": "symbol_notation",
+            "公式困难": "symbol_notation",
+            "符号": "symbol_notation",
+            "公式": "symbol_notation",
+            "计算困难": "calculation",
+            "计算": "calculation",
+            "代入": "calculation",
+            "题意不清": "task_comprehension",
+            "题目理解": "task_comprehension",
+            "题意": "task_comprehension",
+            "未知": "unknown",
+            "不确定": "unknown",
+        }
+        return aliases.get(raw, raw if raw in {
+            "concept_misconception",
+            "symbol_notation",
+            "calculation",
+            "task_comprehension",
+            "unknown",
+        } else "unknown")
 
 
 class EvaluationCase(BaseModel):

@@ -85,7 +85,7 @@ class SessionStore:
 
     def save(self, session: TeachingSession) -> Path:
         session_id = _safe_id(session.session_id, "会话 ID")
-        session.schema_version = 5
+        session.schema_version = 6
         if not session.display_title:
             session.display_title = session.goal.topic
         path = self.directory / f"{session_id}.json"
@@ -101,13 +101,13 @@ class SessionStore:
             payload = json.load(handle)
         payload = self._migrate_payload(payload)
         session = TeachingSession.model_validate(payload)
-        if session.schema_version < 5:
-            session.schema_version = 5
+        if session.schema_version < 6:
+            session.schema_version = 6
         return session
 
     @staticmethod
     def _migrate_payload(payload: dict[str, Any]) -> dict[str, Any]:
-        """Add v4/v5 fields without rewriting the source file on read."""
+        """Add v4/v5/v6 fields without rewriting the source file on read."""
         migrated = dict(payload)
         version = int(migrated.get("schema_version", 1) or 1)
         goal = migrated.get("goal") or {}
@@ -163,6 +163,17 @@ class SessionStore:
                 sum(bool((turn or {}).get("student_message", "").strip()) for turn in migrated.get("turns", []) or []),
             )
             migrated["schema_version"] = 5
+        state = dict(migrated.get("state") or {})
+        state.setdefault("current_difficulty", "unknown")
+        state.setdefault("recommended_strategy", "subject")
+        state.setdefault("misconception_confirmed", False)
+        migrated["state"] = state
+        if version < 6:
+            migrated["turns"] = [
+                {**dict(raw_turn), "difficulty_type": dict(raw_turn).get("difficulty_type", "unknown")}
+                for raw_turn in migrated.get("turns", []) or []
+            ]
+            migrated["schema_version"] = 6
         return migrated
 
     def list_metadata(

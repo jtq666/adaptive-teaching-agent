@@ -11,6 +11,7 @@ from src.config import get_agent_settings
 from src.lesson_planner import LessonPlanner
 from src.llm import LLMUnavailableError, OpenAICompatibleClient
 from src.models import (
+    AdaptiveTurnOutput,
     AgentDecision,
     ConversationTurn,
     GenerationRevision,
@@ -18,6 +19,7 @@ from src.models import (
     QuestionContract,
     SessionStatus,
     SkillPlan,
+    StateAssessment,
     StudentProfile,
     StudentState,
     TeacherDraft,
@@ -40,11 +42,29 @@ from src.state_tracker import StateTracker, has_negative_signal, has_prompt_inje
 from src.storage import SessionStore
 
 GENERIC_SKILLS = {
+    "adaptive": "adaptive_teaching_v1",
     "diagnostic": "diagnostic_questioning_v1",
     "scaffold": "scaffolded_hint_ladder_v1",
     "correction": "misconception_contrast_correction_v1",
     "transfer": "transfer_verification_v1",
 }
+
+LIVE_STRATEGY_DIRECTIVES = {
+    "diagnostic": "只定位学生卡点：回应必要事实，提出一个最小诊断问题，不给完整结论。",
+    "scaffold": "只给下一小步提示。保留当前情境和表示法，不换新例子，不直接给完整公式或答案。",
+    "correction": "只处理已确认的错误观点：复述一个错误模型，对比一个正确原则，给一个最小反例，再让学生改写。",
+    "transfer": "换一个表面不同的新情境，先让学生说核心原则，再说明如何迁移；不得重复上一轮问题。",
+    "subject": "围绕当前学科知识点简短讲解，只推进一个认知任务并提出一个问题。",
+}
+
+# Only used after two model attempts produce the same transfer question. The
+# normal path remains model-generated; these short scenarios prevent a visible
+# loop when a provider ignores the novelty instruction.
+TRANSFER_FALLBACK_SCENARIOS = (
+    ("电梯突然向上加速启动", "这时身体想保持什么状态？"),
+    ("公交车突然向右转弯", "相对车厢身体会向哪一侧偏？为什么？"),
+    ("在光滑水平面上推物体后停止用力", "物体之后的运动会怎样？"),
+)
 
 
 class SessionStoreLike(Protocol):
@@ -105,7 +125,10 @@ class HybridTeachingAgent:
             imported_history=list(history or []),
             available_skill_ids=allowed,
             skill_snapshot=snapshot,
-            teaching_route=self.lesson_planner.build(goal),
+            teaching_route=self.lesson_planner.build(
+                goal,
+                allow_llm=not self._simple_mode_enabled(),
+            ),
         )
         if session.teaching_route:
             initial_state.next_focus = session.teaching_route.current_step().learning_target
@@ -134,6 +157,8 @@ class HybridTeachingAgent:
         session = self._coerce_session(session)
         if session.status != SessionStatus.ACTIVE.value and session.status != SessionStatus.ACTIVE:
             raise RuntimeError("教学会话已终止，请新建会话")
+        if self._simple_mode_enabled() and self.llm.available:
+            return self._handle_adaptive_message(session, message)
         before = session.state.model_copy(deep=True)
         started = time.perf_counter()
         calls_before = getattr(self.llm, "total_calls", None)
@@ -203,6 +228,80 @@ class HybridTeachingAgent:
         self.store.save(session)
         return session
 
+    def _handle_adaptive_message(self, session: TeachingSession, message: str) -> TeachingSession:
+        """Run one live turn with one model call and one state write."""
+        before = session.state.model_copy(deep=True)
+        started = time.perf_counter()
+        calls_before = getattr(self.llm, "total_calls", 0)
+        previous_teacher_message = session.turns[-1].teacher_message if session.turns else ""
+        current_skill = session.turns[-1].selected_skill_id if session.turns else ""
+        decision, assessment = self._adaptive_turn_result(session, message, initial=False)
+        active_point = (
+            session.teaching_route.current_step().knowledge_point
+            if session.teaching_route
+            else ""
+        )
+        after = self.tracker.update(
+            session.goal,
+            session.profile,
+            before,
+            message,
+            GENERIC_SKILLS["transfer"]
+            if decision.action_type == "transfer"
+            else current_skill or decision.primary_skill_id,
+            round_index=session.answered_rounds() + 1,
+            previous_teacher_message=previous_teacher_message,
+            active_knowledge_point=active_point,
+            assessment=assessment,
+        )
+        session.state = after
+        if session.teaching_route:
+            route_before = session.teaching_route.model_copy(deep=True)
+            allow_route_advance = self._route_transition_allowed(session, message, route_before)
+            session.teaching_route = self.lesson_planner.sync(
+                session.teaching_route,
+                after,
+                allow_advance=allow_route_advance,
+            )
+            after.next_focus = session.teaching_route.current_step().learning_target
+
+        calls_after = getattr(self.llm, "total_calls", 0)
+        if isinstance(calls_before, int) and isinstance(calls_after, int) and calls_after > calls_before:
+            decision.llm_trace.append(
+                LLMCallTrace(
+                    operation="adaptive_teaching_turn",
+                    model=str(getattr(self.llm, "model", "")),
+                    attempts=calls_after - calls_before,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                    success=True,
+                )
+            )
+        session.rounds_in_current_run += 1
+        max_rounds = int(self.settings.get("max_rounds", 8))
+        if (
+            decision.action_type == "transfer"
+            and session.state.transfer_verified
+            and self._mastery_thresholds_met(session)
+        ):
+            decision.should_stop = True
+            decision.status = SessionStatus.SUCCESS
+            decision.stop_reason = "掌握度达到阈值，且迁移验证通过。"
+            decision.policy_rule = "mastery_threshold_and_transfer"
+        elif session.rounds_in_current_run >= max_rounds:
+            decision.should_stop = True
+            decision.status = SessionStatus.UNABLE
+            decision.stop_reason = f"达到最大教学轮数 {max_rounds}。"
+            decision.policy_rule = "max_rounds"
+        session.state.phase = self._phase_for_decision(decision)
+        after.phase = session.state.phase
+        self._append_turn(session, message, decision, before, after)
+        if decision.should_stop:
+            session.status = decision.status.value  # type: ignore[assignment]
+            session.termination_reason = decision.stop_reason
+        session.updated_at = now_iso()
+        self.store.save(session)
+        return session
+
     def resume_session(
         self,
         session: TeachingSession,
@@ -257,6 +356,7 @@ class HybridTeachingAgent:
                 "scaffold": "instruction",
                 "correction": "repair",
                 "transfer": "transfer",
+                "explain": "practice",
             }.get(
                 decision.action_type,
                 "practice" if decision.action_type == "subject_instruction" else "instruction",
@@ -601,6 +701,124 @@ class HybridTeachingAgent:
         return bool(self.settings.get("simple_teaching_mode", False))
 
     @staticmethod
+    def _normalize_teacher_match_text(text: str) -> str:
+        return re.sub(r"[\s，。！？!?；：、,.!?;:「」『』（）()\"“”‘’…]+", "", text or "")
+
+    @staticmethod
+    def _last_teacher_question(text: str) -> str:
+        matches = re.findall(r"[^。！？!?]*[？?]", text or "")
+        return matches[-1].strip() if matches else ""
+
+    def _repeats_previous_transfer(self, session: TeachingSession, message: str) -> bool:
+        """Detect a repeated transfer task before it becomes visible in the UI."""
+        if not session.turns or not message.strip():
+            return False
+        previous = session.turns[-1].teacher_message
+        current_question = self._normalize_teacher_match_text(self._last_teacher_question(message))
+        previous_question = self._normalize_teacher_match_text(self._last_teacher_question(previous))
+        if current_question and previous_question:
+            if current_question == previous_question:
+                return True
+            if SequenceMatcher(None, current_question, previous_question).ratio() >= 0.90:
+                return True
+        current_text = self._normalize_teacher_match_text(message)
+        previous_text = self._normalize_teacher_match_text(previous)
+        return bool(
+            current_text
+            and previous_text
+            and SequenceMatcher(None, current_text, previous_text).ratio() >= 0.94
+        )
+
+    def _transfer_fallback_payload(self, session: TeachingSession, focus: str) -> dict[str, str]:
+        used = "".join(turn.teacher_message for turn in session.turns if turn.action_type == "transfer")
+        scenario, question = next(
+            (
+                item
+                for item in TRANSFER_FALLBACK_SCENARIOS
+                if item[0] not in used
+            ),
+            TRANSFER_FALLBACK_SCENARIOS[0],
+        )
+        return {
+            "teacher_message": f"换一个情境：{scenario}。请先说明“{focus}”在这里如何表现，再回答：{question}",
+            "question": question,
+            "context": scenario,
+            "known_fact": "迁移验证必须使用与前一轮不同的表面情境",
+            "expected_signal": "学生能把核心原则迁移到新情境",
+        }
+
+    def _mastery_thresholds_met(self, session: TeachingSession) -> bool:
+        threshold = float(self.settings.get("mastery_threshold", 0.8))
+        point_threshold = float(self.settings.get("point_mastery_threshold", 0.70))
+        values = [session.state.mastery.get(point, 0.0) for point in session.goal.knowledge_points]
+        return bool(values) and session.state.average_mastery() >= threshold and all(
+            value >= point_threshold for value in values
+        )
+
+    @staticmethod
+    def _lowest_mastery_point(session: TeachingSession) -> str:
+        points = [point for point in session.goal.knowledge_points if point in session.state.mastery]
+        return min(points, key=lambda point: session.state.mastery.get(point, 0.0)) if points else ""
+
+    def _compact_live_teacher_message(self, message: str, question: str = "") -> str:
+        """Keep live teacher turns concise without changing the teaching decision."""
+        try:
+            max_chars = int(self.settings.get("live_teacher_max_chars", 100))
+        except (TypeError, ValueError):
+            max_chars = 100
+        max_chars = max(60, min(max_chars, 240))
+        text = re.sub(r"\n{3,}", "\n\n", str(message or "").strip())
+        if len(text) <= max_chars:
+            return text
+
+        normalized_question = re.sub(r"[。！？!?]+$", "", str(question or "").strip())
+        normalized_question = f"{normalized_question}？" if normalized_question else ""
+        if normalized_question and normalized_question not in text:
+            prefix_budget = max_chars - len(normalized_question) - 2
+            if prefix_budget >= 30:
+                prefix = self._take_complete_teacher_sentences(text, prefix_budget)
+                if prefix:
+                    return f"{prefix}\n\n{normalized_question}".strip()
+
+        question_matches = re.findall(r"[^。！？!?]*[？?]", text)
+        last_question = question_matches[-1].strip() if question_matches else ""
+        if last_question and len(last_question) < max_chars - 40:
+            prefix_budget = max_chars - len(last_question) - 2
+            prefix = self._take_complete_teacher_sentences(text, prefix_budget)
+            if prefix and last_question not in prefix:
+                return f"{prefix}\n\n{last_question}".strip()
+
+        compact = self._take_complete_teacher_sentences(text, max_chars)
+        if len(compact) >= 80:
+            return compact
+        return text[: max_chars - 1].rstrip("，、；：,;: ") + "…"
+
+    @staticmethod
+    def _keep_one_teacher_question(message: str) -> str:
+        """Apply the UI's one-question contract without changing the action."""
+        text = str(message or "").strip()
+        positions = [index for index, char in enumerate(text) if char in "？?"]
+        if len(positions) <= 1:
+            return text
+        first = positions[0]
+        return text[: first + 1] + re.sub(r"[？?]", "。", text[first + 1 :])
+
+    @staticmethod
+    def _take_complete_teacher_sentences(text: str, max_chars: int) -> str:
+        sentences = re.findall(r"[^。！？!?]*[。！？!?]|[^。！？!?]+$", text)
+        kept: list[str] = []
+        total = 0
+        for sentence in sentences:
+            item = sentence.strip()
+            if not item:
+                continue
+            if total + len(item) > max_chars:
+                break
+            kept.append(item)
+            total += len(item)
+        return "".join(kept).strip()
+
+    @staticmethod
     def _student_concern(message: str) -> dict[str, str]:
         """Extract a concrete learner question that must be answered first."""
         text = re.sub(r"\s+", "", message or "")
@@ -755,6 +973,338 @@ class HybridTeachingAgent:
             "expected_signal": "学生能回答当前最小问题",
         }
 
+    @staticmethod
+    def _has_confirmed_misconception(state: StudentState) -> bool:
+        """Do not treat a generic "I cannot answer" record as a misconception."""
+
+        return any(
+            item.label != "当前知识点尚未形成可观察理解" and item.count > 0
+            for item in state.misconception_states
+        )
+
+    def _live_strategy_type(
+        self,
+        session: TeachingSession,
+        student_message: str,
+        *,
+        initial: bool,
+        prompt_injection: bool,
+        route,
+        subject: TeachingSkill | None,
+    ) -> tuple[str, str, str]:
+        """Choose the live strategy from model state, with narrow safety guards.
+
+        Real-LLM turns use the persisted diagnosis recommendation. Offline
+        turns retain the old threshold fallback so archived tests and local
+        troubleshooting remain deterministic.
+        """
+
+        if prompt_injection:
+            return "diagnostic", "检测到与学习任务无关的内容，回到当前知识点进行诊断。", "security_guard"
+        if subject is None:
+            return "diagnostic", "没有匹配的学科 Skill，先澄清当前理解。", "subject_skill_guard"
+
+        if not self.llm.available:
+            if session.state.misconception_states and session.state.no_progress_rounds >= int(
+                self.settings.get("correction_after_rounds", 3)
+            ):
+                return "correction", "离线回退：误解持续存在，进入对比纠正。", "offline_threshold_fallback"
+            if session.state.no_progress_rounds >= int(self.settings.get("scaffold_after_rounds", 2)):
+                return "scaffold", "离线回退：连续未进展，降低任务粒度。", "offline_threshold_fallback"
+            if student_message and has_negative_signal(student_message):
+                return "diagnostic", "离线回退：学生表达困惑，先定位卡点。", "offline_threshold_fallback"
+
+        if (
+            route is not None
+            and route.kind == "transfer"
+            and session.state.transfer_verified
+            and not self._mastery_thresholds_met(session)
+        ):
+            return "subject", "迁移验证通过但整体掌握度尚未达标，回到最低掌握点巩固。", "mastery_guard"
+
+        if session.state.recommended_strategy == "transfer":
+            return "transfer", "模型判断当前证据适合进行迁移验证。", "model_diagnosis"
+
+        difficulty = session.state.current_difficulty
+        confirmed_misconception = self._has_confirmed_misconception(session.state)
+        if difficulty == "concept_misconception" and confirmed_misconception:
+            return "correction", "模型确认存在明确概念误解，使用对比与最小反例纠正。", "model_diagnosis"
+        if difficulty in {"symbol_notation", "calculation", "task_comprehension"}:
+            return "scaffold", "模型识别到具体操作困难，先降低任务粒度。", "model_diagnosis"
+        if session.state.recommended_strategy == "correction" and confirmed_misconception:
+            return "correction", "模型推荐纠正，且当前已有明确误解证据。", "model_diagnosis"
+        if session.state.recommended_strategy in {"diagnostic", "scaffold"}:
+            return session.state.recommended_strategy, "模型根据当前困难推荐对应的教学策略。", "model_diagnosis"
+        if student_message and has_negative_signal(student_message):
+            return "diagnostic", "学生表达困惑但困难类型尚不明确，先定位卡点。", "model_diagnosis"
+        if (
+            route is not None
+            and not session.state.transfer_verified
+            and (
+                route.kind == "transfer"
+                or (
+                    not initial
+                    and session.state.average_mastery() >= float(self.settings.get("mastery_threshold", 0.8))
+                )
+                or (
+                    not initial
+                    and session.rounds_in_current_run >= int(self.settings.get("max_rounds", 8)) - 2
+                )
+            )
+        ):
+            return "transfer", "当前路线进入迁移验证阶段。", "route_guard"
+        return "subject", "当前没有明确困难，沿用学科 Skill 自主讲解。", "model_diagnosis"
+
+    def _adaptive_skill_catalog(self, session: TeachingSession) -> list[TeachingSkill]:
+        """Return content Skills for the model to choose from.
+
+        This is a validity boundary, not a turn-level ranking rule.  The
+        model receives the available content Skills and returns one ID.
+        """
+        allowed = set(session.available_skill_ids)
+        skills = [
+            skill
+            for skill in self.library.skills
+            if skill.skill_type == "subject" and (not allowed or skill.skill_id in allowed)
+        ]
+        # The live model receives the complete allowed subject catalog.  Do
+        # not rank or filter it by a second program decision: the only runtime
+        # boundary here is "available subject Skill"; the model chooses the
+        # best content Skill in the single adaptive call.
+        return sorted(skills, key=lambda item: item.skill_id)
+
+    def _adaptive_turn_result(
+        self,
+        session: TeachingSession,
+        student_message: str,
+        *,
+        initial: bool,
+    ) -> tuple[AgentDecision, StateAssessment]:
+        """Ask the model for the complete live teaching decision once."""
+        catalog = self._adaptive_skill_catalog(session)
+        if not catalog:
+            raise RuntimeError("当前会话没有可用的内容 Skill")
+        adaptive_skill = self.library.get(GENERIC_SKILLS["adaptive"])
+        route_step = session.teaching_route.current_step() if session.teaching_route else None
+        previous_turn = session.turns[-1] if session.turns else None
+        previous_message = previous_turn.teacher_message if previous_turn else "无"
+        catalog_text = "\n".join(
+            f"- {skill.skill_id}: {skill.name}；目标：{'；'.join(skill.goal[:2])}；标签：{'、'.join(skill.topic_tags[:4])}"
+            for skill in catalog
+        )
+        system_prompt = (
+            "你是本教学回合唯一的自适应教师。一次完成四件事：理解学生原话、选择最匹配的内容 Skill、"
+            "选择一个教学动作、生成面向学生的回复。不要把任务交给其他策略模块，也不要依据固定轮数或关键词。"
+            "内容 Skill 只能从候选列表选择；教学动作只能是 explain、diagnose、scaffold、correct、transfer。"
+            "correct 只有在学生自己的回答明确表达错误概念关系时使用；学生提问或表示困惑不等于误解。"
+            "scaffold 只给下一小步；diagnose 只定位卡点；explain 讲清一个关系；transfer 更换情境检验同一原理。"
+            "判定示例仅用于理解字段含义：学生说‘我不明白为什么会这样’或‘物体不受力为什么还能继续运动’"
+            "是疑问/困惑，不等于概念误解；学生断言‘运动必须有力维持’才是明确错误模型，应使用 correct；"
+            "学生说明‘合力为零时保持匀速直线运动’是当前正确证据，不应因为历史上出现过误解就继续标为当前误解。"
+            "先判断学生本轮回答本身，再参考历史；历史上的误解不能自动复制到本轮。学生本轮若明确写出正确原则，"
+            "teaching_action 必须使用 explain、diagnose、scaffold 或 transfer，不能使用 correct。"
+            "difficulty 只描述学生当前这一句的主要卡点：看到公式或符号关系看不懂用 symbol_notation，"
+            "不知道题目要求用 task_comprehension，只有明确错误概念关系才用 concept_misconception，泛泛说‘我看不懂’且无法定位时用 unknown。"
+            "若上一轮动作是 scaffold，学生仍说看不懂时继续降低同一任务粒度，"
+            "不要跳回泛泛讲解或换成无关例子。学生若简短回答了上一轮问题，应承接原情境继续推进；"
+            "只有 transfer 动作可以更换表面情境，其他动作不要擅自编造数字例子。"
+            "回复控制在100个汉字以内，保持当前情境，只提出一个自然问题，不要输出内部字段。"
+        )
+        user_prompt = (
+            f"课程：{session.goal.course}\n主题：{session.goal.topic}\n目标：{session.goal.objective}\n"
+            f"知识点：{'、'.join(session.goal.knowledge_points)}\n"
+            f"当前路线目标：{route_step.learning_target if route_step else session.goal.objective}\n"
+            f"候选内容 Skill：\n{catalog_text}\n"
+            f"当前状态：{session.state.model_dump_json()}\n"
+            f"上一轮教师回复：{previous_message}\n"
+            f"学生本轮回答：{student_message or '（首轮，请开始教学）'}\n"
+            f"本轮是否首轮：{initial}"
+        )
+        schema_hint = (
+            '{"content_skill":"候选列表中的 skill_id",'
+            '"teaching_action":"explain|diagnose|scaffold|correct|transfer",'
+            '"difficulty":"concept_misconception|symbol_notation|calculation|task_comprehension|unknown",'
+            '"explicit_misconception":false,"evidence":"一句话说明学生证据",'
+            '"mastery":0到1,"progress":"improved|unchanged|regressed",'
+            '"affected_points":["当前回答涉及的知识点"],'
+            '"evidence_level":"none|partial|correct|explained|transfer",'
+            '"verification_passed":false,"misconceptions":[],"reply":"面向学生的回复",'
+            '"question":"回复中的唯一问题"}'
+        )
+        output: AdaptiveTurnOutput
+        legacy_assessment: StateAssessment | None = None
+        used_fallback = False
+        if self.llm.available:
+            try:
+                raw_output = self.llm.structured(
+                    system_prompt,
+                    user_prompt,
+                    schema_hint,
+                    temperature=float(self.settings.get("temperature", 0.2)),
+                )
+                # Keep old injected test clients and archived integrations
+                # readable during the schema transition. Real live providers
+                # use the combined reply/state contract above.
+                if "reply" not in raw_output and "mastery_updates" in raw_output:
+                    legacy_assessment = StateAssessment.model_validate(raw_output)
+                output = AdaptiveTurnOutput.model_validate(raw_output)
+            except (LLMUnavailableError, ValueError, TypeError):
+                used_fallback = True
+                output = self._adaptive_offline_output(session, student_message, catalog)
+        else:
+            used_fallback = True
+            output = self._adaptive_offline_output(session, student_message, catalog)
+
+        selected = next(
+            (skill for skill in catalog if skill.skill_id == output.content_skill),
+            None,
+        )
+        if selected is None:
+            selected = self._latest_content_skill(session, catalog) or catalog[0]
+        reply = self._keep_one_teacher_question(
+            self._compact_live_teacher_message(output.reply, output.question)
+        )
+        if not reply:
+            reply = self._adaptive_offline_output(session, student_message, [selected]).reply
+            used_fallback = True
+        question = output.question.strip() or self._last_teacher_question(reply)
+        if question.endswith(("？", "?")):
+            question = question[:-1]
+        focus = route_step.knowledge_point if route_step else session.state.next_focus
+        micro_step = TeachingMicroStep(
+            focus=focus,
+            context=route_step.title if route_step else session.goal.topic,
+            known_fact=output.evidence,
+            requested_target=question or "请用自己的话说明当前判断",
+            representation="用自己的话回答",
+            expected_signal="学生能说明当前判断依据",
+            step_index=(previous_turn.micro_step.step_index + 1 if previous_turn and previous_turn.micro_step else 0),
+            response_mode="open",
+            input_hint="请用自己的话回答",
+        )
+        action = output.teaching_action
+        strategy_plan = SkillPlan(
+            content_skill_id=selected.skill_id,
+            strategy_skill_id=adaptive_skill.skill_id,
+            content_skill_reason="由单次自适应教学输出选择",
+            strategy_reason=f"模型选择动作：{action}",
+            candidate_content_skill_ids=[skill.skill_id for skill in catalog],
+            candidate_strategy_skill_ids=[adaptive_skill.skill_id],
+            content_switch=bool(
+                previous_turn
+                and previous_turn.content_skill_id
+                and previous_turn.content_skill_id != selected.skill_id
+            ),
+            strategy_switch=False,
+        )
+        decision = AgentDecision(
+            primary_skill_id=selected.skill_id,
+            support_skill_id=adaptive_skill.skill_id,
+            selection_reason="模型在一次自适应教学输出中同时完成内容 Skill 与教学动作选择。",
+            action_type=action,
+            teacher_message=reply,
+            expected_signal=output.evidence or "学生能回答当前问题",
+            switch_reason=(
+                f"内容 Skill：{previous_turn.content_skill_id} → {selected.skill_id}"
+                if previous_turn and previous_turn.content_skill_id and previous_turn.content_skill_id != selected.skill_id
+                else ""
+            ),
+            decision_mode="single_llm_adaptive_turn" if not used_fallback else "offline_fallback",
+            candidate_skill_ids=[skill.skill_id for skill in catalog],
+            policy_rule="content_skill_exists_only",
+            candidate_audit=[],
+            micro_step=micro_step,
+            teacher_review=TeacherReview(
+                valid=bool(reply),
+                one_step=True,
+                one_context=True,
+                one_question=bool(question),
+                fact_consistent=True,
+                same_context=True,
+            ),
+            generation_audit={
+                "architecture": "single_llm_adaptive_turn",
+                "content_skill": selected.skill_id,
+                "teaching_action": action,
+                "difficulty": output.difficulty,
+                "evidence": output.evidence,
+                "model_mastery": output.mastery,
+                "fallback": used_fallback,
+            },
+            phase="practice",
+            skill_plan=strategy_plan,
+            question_contract=self._question_contract(micro_step),
+            difficulty_type=output.difficulty,
+        )
+        assessment = legacy_assessment or StateAssessment(
+            mastery_updates={focus: output.mastery} if focus in session.goal.knowledge_points else {},
+            misconceptions=output.misconceptions,
+            understanding_signals=[output.evidence] if output.evidence else [],
+            next_focus=focus,
+            verification_passed=output.verification_passed,
+            progress=output.progress,
+            affected_points=[point for point in output.affected_points if point in session.goal.knowledge_points],
+            evidence_levels={
+                point: output.evidence_level
+                for point in output.affected_points
+                if point in session.goal.knowledge_points
+            },
+            confidence=0.7,
+            evidence_reason=output.evidence,
+            explicit_misconception=output.explicit_misconception,
+            difficulty_type=output.difficulty,
+            recommended_strategy={
+                "explain": "subject",
+                "diagnose": "diagnostic",
+                "scaffold": "scaffold",
+                "correct": "correction",
+                "transfer": "transfer",
+            }[action],
+        )
+        decision.phase = self._phase_for_decision(decision)
+        return decision, assessment
+
+    @staticmethod
+    def _latest_content_skill(session: TeachingSession, catalog: list[TeachingSkill]) -> TeachingSkill | None:
+        for turn in reversed(session.turns):
+            content_id = turn.content_skill_id or (turn.skill_plan.content_skill_id if turn.skill_plan else None)
+            for skill in catalog:
+                if skill.skill_id == content_id:
+                    return skill
+        return None
+
+    def _adaptive_offline_output(
+        self,
+        session: TeachingSession,
+        student_message: str,
+        catalog: list[TeachingSkill],
+    ) -> AdaptiveTurnOutput:
+        selected = self._latest_content_skill(session, catalog)
+        if selected is None:
+            ranked = self.library.rank(
+                session.goal,
+                session.state,
+                student_message,
+                limit=len(catalog),
+                include_generic=False,
+            )
+            selected = next((skill for skill in ranked if skill in catalog), None) or catalog[0]
+        focus = session.teaching_route.current_step().knowledge_point if session.teaching_route else session.goal.knowledge_points[0]
+        target = session.teaching_route.current_step().learning_target if session.teaching_route else f"说明“{focus}”"
+        if student_message:
+            reply = f"先围绕“{focus}”说清一个判断。{target}？"
+        else:
+            reply = f"我们从“{focus}”开始。请用自己的话说明：{target}？"
+        return AdaptiveTurnOutput(
+            content_skill=selected.skill_id,
+            teaching_action="explain",
+            difficulty="unknown",
+            evidence="",
+            mastery=session.state.mastery.get(focus, 0.3),
+            reply=reply,
+            question=target,
+        )
+
     def _decide_simple(self, session: TeachingSession, student_message: str, initial: bool) -> AgentDecision:
         """Run the small live-teaching loop used by the real-time UI.
 
@@ -779,56 +1329,31 @@ class HybridTeachingAgent:
             candidate_audit = [item for item in candidate_audit if item.get("skill_id") in allowed]
         subject = next((skill for skill in ranked if skill.skill_type == "subject"), None)
         route = session.teaching_route.current_step() if session.teaching_route else None
-        latest = session.state.evidence[-1] if session.state.evidence else None
-        confused = bool(
-            student_message
-            and (
-                has_negative_signal(student_message)
-                or (latest and latest.signal_type in {"negative", "empty"})
-                or session.state.misconception_states
-            )
+        strategy_type, reason, decision_mode = self._live_strategy_type(
+            session,
+            student_message,
+            initial=initial,
+            prompt_injection=prompt_injection,
+            route=route,
+            subject=subject,
         )
-
-        if prompt_injection or confused:
-            no_progress = session.state.no_progress_rounds
-            correction_after = int(self.settings.get("correction_after_rounds", 3))
-            scaffold_after = int(self.settings.get("scaffold_after_rounds", 2))
-            if prompt_injection:
-                strategy_id = GENERIC_SKILLS["diagnostic"]
-            elif no_progress >= correction_after and session.state.misconception_states:
-                strategy_id = GENERIC_SKILLS["correction"]
-            elif no_progress >= scaffold_after:
-                strategy_id = GENERIC_SKILLS["scaffold"]
-            else:
-                strategy_id = GENERIC_SKILLS["diagnostic"]
-            primary = self.library.get(strategy_id)
-            support = subject
-            action_type = primary.skill_type
-            reason = "先回应学生当前的困惑，再用一个问题确认理解。"
-        elif (
-            route is not None
-            and (
-                route.kind == "transfer"
-                or (
-                    not initial
-                    and session.state.average_mastery() >= float(self.settings.get("mastery_threshold", 0.8))
-                )
-                or (
-                    not initial
-                    and session.rounds_in_current_run
-                    >= int(self.settings.get("max_rounds", 8)) - 2
-                )
-            )
-        ):
+        if strategy_type == "transfer":
             primary = self.library.get(GENERIC_SKILLS["transfer"])
             support = subject
             action_type = "transfer"
-            reason = "当前知识点已有足够解释证据，进入一个新情境做迁移验证。"
+            reason = reason or "进入一个新情境验证是否真正理解。"
+        elif strategy_type in {"diagnostic", "scaffold", "correction"}:
+            primary = self.library.get(GENERIC_SKILLS[strategy_type])
+            support = subject
+            action_type = primary.skill_type
         elif subject is not None:
+            if route is not None and route.kind == "transfer" and session.state.transfer_verified:
+                lowest_focus = self._lowest_mastery_point(session)
+                if lowest_focus:
+                    session.state.next_focus = lowest_focus
             primary = subject
             support = None
             action_type = "subject_instruction"
-            reason = "沿用当前学科 Skill，围绕当前路线步骤继续教学。"
         else:
             primary = self.library.get(GENERIC_SKILLS["diagnostic"])
             support = None
@@ -866,7 +1391,7 @@ class HybridTeachingAgent:
             teacher_message=generation.message,
             expected_signal=generation.micro_step.expected_signal if generation.micro_step else "学生能回答当前问题",
             switch_reason=switch_reason,
-            decision_mode="simple_live_flow",
+            decision_mode=decision_mode,
             candidate_skill_ids=[skill.skill_id for skill in ranked],
             policy_rule="feedback_then_one_question",
             candidate_audit=candidate_audit,
@@ -876,6 +1401,7 @@ class HybridTeachingAgent:
             phase=phase,
             skill_plan=skill_plan,
             question_contract=self._question_contract(generation.micro_step),
+            difficulty_type=session.state.current_difficulty,
             fallback_reason=(
                 generation.fallback_reason
                 or ("无学科 Skill 通过硬过滤，已回退到通用诊断。" if subject is None else "")
@@ -893,44 +1419,125 @@ class HybridTeachingAgent:
         route_step = session.teaching_route.current_step() if session.teaching_route else None
         previous_turn = session.turns[-1] if session.turns else None
         previous_question = previous_turn.teacher_message if previous_turn else "无"
-        route_target = route_step.learning_target if route_step else session.state.next_focus or session.goal.objective
+        transfer_followup = bool(
+            route_step
+            and route_step.kind == "transfer"
+            and action_type != "transfer"
+            and session.state.transfer_verified
+        )
+        route_target = (
+            f"巩固知识点“{session.state.next_focus}”，达到整体掌握终止条件"
+            if transfer_followup and session.state.next_focus
+            else route_step.learning_target
+            if route_step
+            else session.state.next_focus or session.goal.objective
+        )
         concern = self._student_concern(student_message)
         previous_context = (
             previous_turn.micro_step.context
             if previous_turn and previous_turn.micro_step
             else "无"
         )
+        previous_step_summary = (
+            previous_turn.micro_step.model_dump_json()
+            if previous_turn and previous_turn.micro_step
+            else "无"
+        )
+        content_skill = (
+            primary
+            if primary.skill_type == "subject"
+            else support
+            if support and support.skill_type == "subject"
+            else None
+        )
+        strategy_skill = (
+            support
+            if support and support.skill_type != "subject"
+            else primary
+            if primary.skill_type != "subject"
+            else None
+        )
+        strategy_type = strategy_skill.skill_type if strategy_skill else "subject"
+        strategy_directive = LIVE_STRATEGY_DIRECTIVES.get(
+            strategy_type,
+            LIVE_STRATEGY_DIRECTIVES["subject"],
+        )
         if self.llm.available:
             try:
+                system_prompt = (
+                    "你是一名真正和学生对话的教师。请根据课程目标、当前 Skill、学生状态、学生刚才的话和历史情境，"
+                    "自主决定这一轮最合适的教学方式。可以解释、举例、反问、纠错、对比或推进，不要机械套用固定流程。"
+                    "优先回应学生真正的困惑，保持学科内容准确、表达自然，不要输出 Skill、路线、掌握度、证据或内部流程。"
+                    "内容 Skill 负责知识的准确性，策略 Skill 负责本轮教学动作；回复必须体现策略意图，但措辞和例子由你自主组织。"
+                    "回复控制在60到90个汉字，最长不要超过100个汉字；只保留一个核心解释和一个自然追问，避免长篇讲解。"
+                    "策略行为是硬性教学合同：分层提示只能给下一步，误解纠正只能处理已确认的错误观点，"
+                    "诊断提问只定位卡点，迁移验证必须更换情境；不要用普通讲解替代已选策略。"
+                )
+                user_prompt = (
+                    f"课程：{session.goal.course}\n主题：{session.goal.topic}\n教学目标：{session.goal.objective}\n"
+                    f"当前路线目标：{route_target}\n当前教学动作：{action_type}\n"
+                    f"内容 Skill：{content_skill.generation_summary() if content_skill else '未匹配学科 Skill'}\n"
+                    f"策略 Skill：{strategy_skill.generation_summary() if strategy_skill else '内容 Skill 自主讲解'}\n"
+                    f"本轮策略意图：{strategy_directive}\n"
+                    "教学状态摘要：\n"
+                    f"- 当前困难类型：{session.state.current_difficulty}\n"
+                    f"- 模型建议策略：{session.state.recommended_strategy}\n"
+                    f"- 当前掌握状态：{session.state.model_dump_json()}\n"
+                    f"上一轮教师话语：{previous_question}\n学生刚才的话：{student_message or '尚未回答'}\n"
+                    f"上一轮微步骤：{previous_step_summary}\n上一轮微步骤情境：{previous_context}\n"
+                    f"学生明确疑问（若为空则没有）：{concern.get('text', '无')}\n"
+                    "请自主完成这一轮教学，并给出面向学生的完整回复。"
+                )
+                schema_hint = (
+                    '{"teacher_message":"面向学生的完整自然回复","student_concern":"学生明确提出的疑问或空字符串",'
+                    '"direct_answer":"如果有明确疑问，提炼直接回答；没有则为空","feedback":"可选的简短反馈",'
+                    '"question":"可选的下一步问题","context":"当前情境","known_fact":"本轮可用的事实",'
+                    '"expected_signal":"希望学生表现出的理解"}'
+                )
                 data = self.llm.structured(
-                    (
-                        "你是一名真正和学生对话的教师。你的任务不是收集审计证据，而是帮助学生理解当前问题。"
-                        "如果学生上一句话包含明确疑问或不确定，必须先直接回答这个疑问，再提出一个最小追问；"
-                        "不能只说‘我们先澄清一下’，也不能把问题改写成抽象的‘判断依据’。"
-                        "先根据学生上一句话给出一到两句直接、具体的反馈；如果学生困惑，先澄清困惑中的关键区别。"
-                        "然后只提出一个学生可以回答的问题。反馈可以解释当前误解，但不要一次讲完整节课，"
-                        "不要模拟学生，不要出现 Skill、路线、掌握度、证据、内部流程等词。"
-                        "必须延续当前情境；学生已经回答正确时，承认正确并推进到下一个认知任务，不能换词重复原问题。"
-                        "如果当前是迁移验证，必须换一个新情境。"
-                        "若学生问的是‘速度是否变化、是否有加速度、合力是否为零’，优先建立‘速度变化→有加速度→合力不为零’的链条；"
-                        "若当前情境已给出脚底与地板摩擦力，就不能回答成‘乘客没有水平力’。"
-                        "除非当前教学动作是迁移验证，必须沿用上一轮微步骤的情境和表示法；"
-                        "不能因为知识点切换就另造一个例子、改变运动方向或把公交车急刹车改成加速。"
-                        "公交车站立且没有扶手的情境不得新增安全带、座椅或其他题设没有出现的装置。"
-                    ),
-                    (
-                        f"课程：{session.goal.course}\n主题：{session.goal.topic}\n教学目标：{session.goal.objective}\n"
-                        f"当前路线目标：{route_target}\n当前教学动作：{action_type}\n"
-                        f"学生状态：{session.state.model_dump_json()}\n"
-                        f"上一轮教师话语：{previous_question}\n学生刚才的话：{student_message or '尚未回答'}\n"
-                        f"上一轮微步骤情境（非迁移时必须沿用）：{previous_context}\n"
-                        f"学生明确疑问（若为空则没有）：{concern.get('text', '无')}\n"
-                        "请输出反馈和一个问题。"
-                    ),
-                    '{"student_concern":"学生明确提出的疑问或空字符串","direct_answer":"必须先回答该疑问；无明确疑问时可为空","feedback":"给学生的简短反馈或澄清","question":"唯一一个具体、可回答的问题","context":"当前情境","known_fact":"本轮可用的已知条件","expected_signal":"希望学生表现出的理解"}',
+                    system_prompt,
+                    user_prompt,
+                    schema_hint,
                     temperature=float(self.settings.get("temperature", 0.2)),
                 )
-                return self._build_simple_generation(session, data, action_type, student_message)
+                generation = self._build_simple_generation(session, data, action_type, student_message)
+                if action_type == "transfer" and self._repeats_previous_transfer(session, generation.message):
+                    retry_data = self.llm.structured(
+                        system_prompt
+                        + "本轮是迁移验证。上一轮迁移问题已经回答过，必须换一个表面不同的新情境和新问题；"
+                        "不得复述上一轮情境、问题或教师话语。",
+                        user_prompt
+                        + f"\n上一轮迁移话语不能重复：{previous_question}\n"
+                        "请重新生成一个不同情境的迁移问题。",
+                        schema_hint,
+                        temperature=float(self.settings.get("temperature", 0.2)),
+                    )
+                    generation = self._build_simple_generation(
+                        session,
+                        retry_data,
+                        action_type,
+                        student_message,
+                    )
+                    if self._repeats_previous_transfer(session, generation.message):
+                        generation = self._build_simple_generation(
+                            session,
+                            self._transfer_fallback_payload(session, focus=session.state.next_focus or session.goal.topic),
+                            action_type,
+                            student_message,
+                            enforce_concern=False,
+                            llm_generated=False,
+                        )
+                        generation.fallback_reason = "迁移问题重复，已切换到备用新情境"
+                        generation.audit = {
+                            **(generation.audit or {}),
+                            "transfer_novelty_fallback": True,
+                        }
+                    else:
+                        generation.audit = {
+                            **(generation.audit or {}),
+                            "transfer_regenerated_for_novelty": True,
+                        }
+                return generation
             except (LLMUnavailableError, ValueError, TypeError, KeyError):
                 pass
         return self._simple_fallback_generation(session, action_type, route_step, student_message)
@@ -945,14 +1552,29 @@ class HybridTeachingAgent:
         llm_generated: bool = True,
     ) -> MessageGeneration:
         route_step = session.teaching_route.current_step() if session.teaching_route else None
-        focus = route_step.knowledge_point if route_step else self._focus_label(session)
+        transfer_followup = bool(
+            route_step
+            and route_step.kind == "transfer"
+            and action_type != "transfer"
+            and session.state.transfer_verified
+        )
+        focus = (
+            session.state.next_focus
+            if transfer_followup and session.state.next_focus
+            else route_step.knowledge_point
+            if route_step
+            else self._focus_label(session)
+        )
         concern = self._student_concern(student_message)
+        model_message = str(data.get("teacher_message", "")).strip()
         direct_answer = str(data.get("direct_answer", "")).strip()
         feedback = direct_answer if concern and direct_answer else str(data.get("feedback", "")).strip()
         question = str(data.get("question", "")).strip()
-        if not question:
+        if not question and not model_message:
             raise ValueError("简单教师回复缺少问题")
-        if enforce_concern and concern and (
+        if not question:
+            question = "请继续说明你的想法？"
+        if not model_message and enforce_concern and concern and (
             not direct_answer
             or not self._concern_answer_is_sufficient(concern, direct_answer)
             or self._concern_answer_conflicts_with_context(session, concern, direct_answer)
@@ -969,53 +1591,54 @@ class HybridTeachingAgent:
             fallback.fallback_reason = "answer_first_concern_guard"
             fallback.audit = {**(fallback.audit or {}), "fallback_reason": fallback.fallback_reason}
             return fallback
-        feedback = re.sub(r"[？?]+", "。", feedback).strip()
-        if self._contains_multiple_requests(question):
-            question = self._single_target(question, focus)
-        if self._contains_multiple_requests(f"{feedback}。{question}"):
-            feedback = self._trim_simple_feedback(feedback)
-        if route_step is not None and route_step.kind == "transfer":
-            prefix = "再换一个" if session.turns and session.turns[-1].action_type == "transfer" else "换一个"
-            question = f"请{prefix}不同于刚才的新情境，说明“{focus}”如何表现"
-        elif session.turns:
-            previous = session.turns[-1].teacher_message
-            previous_parts = [
-                part.strip()
-                for part in re.split(r"[。！？!?]\s*", previous.strip())
-                if part.strip()
-            ]
-            previous_question = (
-                session.turns[-1].micro_step.requested_target
-                if session.turns[-1].micro_step is not None
-                else previous_parts[-1]
-                if previous_parts
-                else previous.strip()
-            )
-            similarity = SequenceMatcher(None, question, previous_question).ratio()
-            if question in previous or previous_question in question or similarity >= 0.72:
-                if concern:
-                    fallback_payload = self._concern_fallback_payload(session, concern, route_step)
-                    question = fallback_payload["question"]
-                elif any(cue in student_message for cue in ("有没有受到力", "到底有没有力", "受到力")):
-                    question = "现在只判断：身体在水平方向是否受到向后的力"
-                else:
-                    repeated_step = TeachingMicroStep(
-                        focus=focus,
-                        context=(route_step.title if route_step else session.goal.topic),
-                        known_fact="",
-                        requested_target=question,
-                        representation="用自己的话回答",
-                        expected_signal="学生能回答当前问题",
-                        step_index=(
-                            session.turns[-1].micro_step.step_index + 1
-                            if session.turns[-1].micro_step
-                            else 1
-                        ),
-                    )
-                    question = self._advance_repeated_target(session, repeated_step).requested_target
-        if self._contains_multiple_requests(f"{feedback}。{question}"):
-            feedback = self._trim_simple_feedback(feedback)
-        question = re.sub(r"[。！？!?]+", "。", question).strip().rstrip("。") + "？"
+        if not model_message:
+            feedback = re.sub(r"[？?]+", "。", feedback).strip()
+            if self._contains_multiple_requests(question):
+                question = self._single_target(question, focus)
+            if self._contains_multiple_requests(f"{feedback}。{question}"):
+                feedback = self._trim_simple_feedback(feedback)
+            if route_step is not None and route_step.kind == "transfer":
+                prefix = "再换一个" if session.turns and session.turns[-1].action_type == "transfer" else "换一个"
+                question = f"请{prefix}不同于刚才的新情境，说明“{focus}”如何表现"
+            elif session.turns:
+                previous = session.turns[-1].teacher_message
+                previous_parts = [
+                    part.strip()
+                    for part in re.split(r"[。！？!?]\s*", previous.strip())
+                    if part.strip()
+                ]
+                previous_question = (
+                    session.turns[-1].micro_step.requested_target
+                    if session.turns[-1].micro_step is not None
+                    else previous_parts[-1]
+                    if previous_parts
+                    else previous.strip()
+                )
+                similarity = SequenceMatcher(None, question, previous_question).ratio()
+                if question in previous or previous_question in question or similarity >= 0.72:
+                    if concern:
+                        fallback_payload = self._concern_fallback_payload(session, concern, route_step)
+                        question = fallback_payload["question"]
+                    elif any(cue in student_message for cue in ("有没有受到力", "到底有没有力", "受到力")):
+                        question = "现在只判断：身体在水平方向是否受到向后的力"
+                    else:
+                        repeated_step = TeachingMicroStep(
+                            focus=focus,
+                            context=(route_step.title if route_step else session.goal.topic),
+                            known_fact="",
+                            requested_target=question,
+                            representation="用自己的话回答",
+                            expected_signal="学生能回答当前问题",
+                            step_index=(
+                                session.turns[-1].micro_step.step_index + 1
+                                if session.turns[-1].micro_step
+                                else 1
+                            ),
+                        )
+                        question = self._advance_repeated_target(session, repeated_step).requested_target
+            if self._contains_multiple_requests(f"{feedback}。{question}"):
+                feedback = self._trim_simple_feedback(feedback)
+            question = re.sub(r"[。！？!?]+", "。", question).strip().rstrip("。") + "？"
         context = str(data.get("context", "")).strip() or (route_step.title if route_step else session.goal.topic)
         context_locked = bool(
             session.turns
@@ -1037,7 +1660,9 @@ class HybridTeachingAgent:
             response_mode="open",
             input_hint="请用自己的话回答",
         )
-        message = f"{feedback}\n\n{question}" if feedback else question
+        message = model_message or (f"{feedback}\n\n{question}" if feedback else question)
+        if model_message and self._simple_mode_enabled():
+            message = self._compact_live_teacher_message(message, question)
         return MessageGeneration(
             message=message.strip(),
             micro_step=step,
@@ -1077,8 +1702,7 @@ class HybridTeachingAgent:
         if concern:
             payload = self._concern_fallback_payload(session, concern, route_step)
         elif action_type == "transfer":
-            feedback = "前面的解释已经完成，现在换一个情境检查你能否迁移这个理解。"
-            question = f"请换一个不同于刚才的新情境，说明“{focus}”如何表现？"
+            payload = self._transfer_fallback_payload(session, focus)
         elif action_type in {"diagnostic", "correction"}:
             feedback = "我们先把你刚才卡住的一个区别说清楚，再继续往下。"
             question = f"请只用一句话说明你对“{focus}”目前最确定的一个判断。"
@@ -1086,7 +1710,7 @@ class HybridTeachingAgent:
             feedback = "你的回答会作为我们继续学习的依据。"
             target = route_step.learning_target if route_step else f"说明“{focus}”"
             question = f"请用自己的话说明：{target}？"
-        if not concern:
+        if not concern and action_type != "transfer":
             payload = {
                 "feedback": feedback,
                 "question": question,
@@ -1104,6 +1728,9 @@ class HybridTeachingAgent:
         )
 
     def _decide(self, session: TeachingSession, student_message: str, initial: bool) -> AgentDecision:
+        if self._simple_mode_enabled() and self.llm.available:
+            decision, _ = self._adaptive_turn_result(session, student_message, initial=initial)
+            return decision
         if self._simple_mode_enabled():
             return self._decide_simple(session, student_message, initial)
         prompt_injection = has_prompt_injection(student_message)
@@ -1210,7 +1837,6 @@ class HybridTeachingAgent:
             else student_message
         )
         generation = self.response_role.execute(session, primary, support, action_type, generation_message)
-        generation = self._apply_simple_teaching_flow(session, generation)
         expected = primary.student_signals[0] if primary.student_signals else "学生能解释下一步推理"
         previous = session.turns[-1].selected_skill_id if session.turns else ""
         skill_plan = self._skill_plan(session, primary, support, [skill.skill_id for skill in ranked], previous)
@@ -1261,67 +1887,6 @@ class HybridTeachingAgent:
                 else "无学科 Skill 通过硬过滤，回退到通用诊断" if no_subject_match else generation.fallback_reason
             ),
         )
-
-    def _apply_simple_teaching_flow(
-        self,
-        session: TeachingSession,
-        generation: MessageGeneration,
-    ) -> MessageGeneration:
-        """Keep the live lesson focused on one small, visible progression.
-
-        The existing generation and audit pipeline remains available for
-        compatibility, but it used to turn every repeated target into another
-        evidence request. In live teaching that produced a polished loop
-        without a change in the learner's cognitive task. This small policy
-        layer makes the route authoritative: a completed route step advances,
-        and the transfer step always asks for a genuinely new situation.
-        """
-        if not self.settings.get("simple_teaching_mode", False) or generation.micro_step is None:
-            return generation
-        route = session.teaching_route
-        if route is None or not route.steps:
-            return generation
-
-        current = route.current_step()
-        step = generation.micro_step.model_copy(deep=True)
-        changed = False
-        if current.kind == "transfer":
-            focus = current.knowledge_point or step.focus or session.goal.topic
-            step.focus = focus
-            step.requested_target = f"请换一个不同于刚才的新情境，说明“{focus}”如何表现？"
-            step.step_index = max(step.step_index, 1)
-            generation.message = self._natural_message(session, step)
-            changed = True
-        elif session.turns and session.turns[-1].micro_step is not None:
-            previous = session.turns[-1].micro_step
-            latest = session.state.evidence[-1] if session.state.evidence else None
-            same_focus = self._focus_terms_match(previous.focus, current.knowledge_point)
-            positive = bool(
-                latest
-                and latest.signal_type in {"positive", "transfer"}
-                and latest.evidence_level in {"correct", "explained", "transfer"}
-            )
-            if same_focus and positive and self._repeats_previous_target(previous, step):
-                # One follow-up can deepen the current step; after that, move
-                # to an application/comparison task instead of collecting more
-                # synonyms for the same explanation.
-                step.focus = current.knowledge_point
-                step.requested_target = (
-                    f"请说明如果当前情境中的关键条件改变，关于“{current.knowledge_point}”的判断会怎样变化？"
-                )
-                step.step_index = max(step.step_index, previous.step_index + 1)
-                generation.message = self._natural_message(session, step)
-                changed = True
-
-        if not changed:
-            return generation
-        audit = dict(generation.audit or {})
-        audit["simple_teaching_flow"] = "route_step_or_transfer"
-        audit["simple_teaching_flow_changed_output"] = True
-        generation.audit = audit
-        generation.micro_step = step
-        generation.review = generation.review
-        return generation
 
     def _llm_select(
         self,
@@ -1709,7 +2274,7 @@ class HybridTeachingAgent:
                     "不要只说‘在这个主题中’。教师话语不能把正确结论写进问题里再让学生解释。"
                     "如果要学生预测或描述现象，context 和 known_fact 只能给条件，不能提前写出该现象或结论。"
                     "学生可见的话语不得出现‘本轮只处理’、‘当前还没有足够的学生回答证据’、"
-                    "‘专业决策证据’、‘答辩演示输入建议’等内部审计用语；这些只属于教师视图。"
+                    "‘专业决策证据’、‘答辩演示输入建议’等内部审计用语；这些只属于系统证据面板，不要写进教师话语。"
                     "必须核对数字、比较符号、下标和结论之间的事实一致性。"
                     "教师话语必须只提出一个最终可回答的问题。"
                     "当前教学路线步骤是课程边界：focus 必须是该步骤的 knowledge_point，"
@@ -3023,6 +3588,7 @@ class HybridTeachingAgent:
                 skill_plan=plan,
                 question_contract=deepcopy(decision.question_contract),
                 llm_trace=deepcopy(decision.llm_trace),
+                difficulty_type=decision.difficulty_type,
                 generation_revisions=[
                     GenerationRevision(
                         revision_index=1,

@@ -78,6 +78,12 @@ if (Test-Path -LiteralPath $contextAcceptance) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $contextTarget) -Force | Out-Null
     Copy-Item -LiteralPath $contextAcceptance -Destination $contextTarget
 }
+$adaptiveAcceptance = Join-Path $projectRoot "output\evaluations\online_adaptive_teaching_acceptance.json"
+if (Test-Path -LiteralPath $adaptiveAcceptance) {
+    $adaptiveTarget = Join-Path $packageRoot "output\evaluations\online_adaptive_teaching_acceptance.json"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $adaptiveTarget) -Force | Out-Null
+    Copy-Item -LiteralPath $adaptiveAcceptance -Destination $adaptiveTarget
+}
 
 $evaluationSource = Join-Path $projectRoot "output\evaluations"
 $latestEvaluation = $null

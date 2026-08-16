@@ -64,14 +64,6 @@ RESPONSE_MODE_LABELS = {
     "numeric": "数值回答",
 }
 
-RESPONSE_PREFERENCE_LABELS = {
-    "auto": "Agent 自适应选择",
-    "open": "开放回答",
-    "single_choice": "单选题",
-    "fill_blank": "填空题",
-    "numeric": "数值题",
-}
-
 PHASE_LABELS = {
     "diagnosis": "诊断理解",
     "instruction": "提供支架",
@@ -112,6 +104,14 @@ EVIDENCE_LABELS = {
     "correct": "正确回答",
     "explained": "说明了依据",
     "transfer": "迁移成功",
+}
+
+DIFFICULTY_LABELS = {
+    "concept_misconception": "概念误解",
+    "symbol_notation": "符号/公式困难",
+    "calculation": "计算/代入困难",
+    "task_comprehension": "题意理解困难",
+    "unknown": "暂未判断",
 }
 
 
@@ -164,7 +164,7 @@ def execution_role_label(turn: ConversationTurn) -> str:
     content_id = turn.skill_plan.content_skill_id if turn.skill_plan else turn.content_skill_id
     strategy_id = turn.skill_plan.strategy_skill_id if turn.skill_plan else turn.strategy_skill_id
     if turn.selected_skill_id == strategy_id:
-        return f"教学策略（{strategy_id or '通用策略'}）"
+        return f"教学策略（{strategy_id or '内容 Skill 自主讲解'}）"
     if turn.selected_skill_id == content_id:
         return f"内容讲解（{content_id or '通用内容'}）"
     return f"执行 Skill（{turn.selected_skill_id}）"
@@ -179,37 +179,23 @@ def skill_switch_message(previous: ConversationTurn, current: ConversationTurn) 
     strategy_after = current_plan.strategy_skill_id if current_plan else current.strategy_skill_id
     plan_changes = []
     if content_before != content_after:
-        plan_changes.append(f"内容 Skill：{content_before or '通用'} → {content_after or '通用'}")
+        plan_changes.append(f"内容：{content_before or '通用'} → {content_after or '通用'}")
     if strategy_before != strategy_after:
-        plan_changes.append(f"教学策略：{strategy_before or '未指定'} → {strategy_after or '未指定'}")
+        plan_changes.append(f"策略：{strategy_before or '未指定'} → {strategy_after or '未指定'}")
     if plan_changes:
-        role_change = ""
-        if previous.selected_skill_id != current.selected_skill_id:
-            role_change = (
-                f"；本轮主执行角色：{execution_role_label(previous)} → "
-                f"{execution_role_label(current)}"
-            )
-        return "**Skill 已切换 · 教学方案组成** · " + "；".join(plan_changes) + role_change
+        return "**Skill 已切换** · " + "；".join(plan_changes)
     if previous.selected_skill_id != current.selected_skill_id:
-        return (
-            "**Skill 已切换 · 本轮主执行角色** · "
-            f"{execution_role_label(previous)} → {execution_role_label(current)}；"
-            "内容 Skill × 教学策略组合保持不变。"
-        )
-    return "**执行方式已调整** · " + current.switch_reason
+        return f"**Skill 已切换** · {execution_role_label(previous)} → {execution_role_label(current)}"
+    return "**执行方式已调整**"
 
 
 page_header(
     "实时教学",
-    "老师每次只问一个问题，并根据你的回答决定下一步。",
+    "老师根据你的回答自主组织教学，并根据状态决定下一步。",
     eyebrow="自适应教学",
     icon="forum",
 )
 inject_live_chat_css()
-st.caption(
-    "现场推荐先演示牛顿第一定律，再演示导数极限定义；"
-    "二分查找保留在 Skill Library 和评估集，不作为默认演示入口。"
-)
 max_rounds = int(get_agent_settings().get("max_rounds", 8))
 
 session = st.session_state.teaching_session
@@ -229,7 +215,6 @@ if session is None:
     skill_options = [skill.skill_id for skill in library.skills]
     with st.form("start_session", border=True):
         st.subheader("开始一段教学")
-        st.caption("先填写最必要的信息；知识点状态、历史和 Skill 限制都在高级设置中。")
         setup_columns = st.columns([0.7, 1.3], gap="medium", vertical_alignment="bottom")
         with setup_columns[0]:
             course = st.selectbox(
@@ -253,10 +238,7 @@ if session is None:
             required=True,
             key="start_level",
         )
-        st.caption("当前基础版统一使用开放回答，Agent 根据学生原话更新状态。")
-
         with st.expander("高级设置", icon=":material/tune:"):
-            st.caption("这些设置用于自定义课程、恢复历史或限制本次可用 Skill。演示时通常无需修改。")
             points_text = st.text_input("知识点（逗号分隔）", key="start_points", help="每个知识点都会单独维护 0–1 掌握度。")
             student_name = st.text_input("学生姓名", key="start_student_name")
             initial_mastery = st.slider(
@@ -296,13 +278,12 @@ if session is None:
         submitted = st.form_submit_button("开始教学", type="primary", icon=":material/play_arrow:", width="stretch")
 
     demo_notes = {
-        "牛顿第一定律": "推荐首演：公交车急刹车的生活情境直观，最容易看出“困惑 → 诊断 → 分层提示”。",
-        "导数极限定义": "推荐第二个演示：从平均速度过渡到瞬时速度，适合展示同一 Agent 在高等数学中的迁移。",
+        "牛顿第一定律": "生活情境直观，适合展示诊断、支架、纠错和迁移。",
+        "导数极限定义": "从平均变化率过渡到瞬时变化率，适合展示数学迁移。",
     }
     with st.container(border=True):
         st.markdown(f"**现场演示建议 · {preset_name}**")
         st.caption(demo_notes[preset_name])
-        st.caption("操作顺序：开始教学 → 先输入困惑 → 再使用“AI 推荐演示回答”选择部分理解或正确回答 → 切到教师/答辩视图查看 Skill 变化。")
 
     if submitted:
         points = [item.strip() for item in points_text.replace("，", ",").split(",") if item.strip()]
@@ -362,13 +343,10 @@ if session is None:
                 st.error(f"无法开始教学：{exc}", icon=":material/error:")
 else:
     # Streamlit removes widgets that are not rendered after a session starts.
-    # Keep the form's key fields available for a rerun that only changes the
-    # student/teacher view; this also prevents AppTest and browser back/forward
-    # navigation from resurrecting a stale segmented-control widget.
+    # Keep the form's key field available for browser back/forward navigation.
     st.session_state.setdefault("start_level", st.session_state.teaching_session.profile.level)
     session = st.session_state.teaching_session
     teaching_rounds = session.answered_rounds()
-    teacher_view_active = st.session_state.get("live_view_mode") == "教师/答辩视图"
     with st.sidebar:
         st.space("small")
         st.subheader("学习进度")
@@ -377,34 +355,22 @@ else:
             route_total = len(route.steps)
             st.progress(
                 route.completed_count() / route_total,
-                text=f"教学路线 {route.completed_count()} / {route_total}",
+                text=f"路线 {route.completed_count()}/{route_total} · {route.current_step().title}",
             )
-            st.caption(f"当前目标：{route.current_step().title}")
-        st.caption(f"已完成 {teaching_rounds} 次回答")
         if session.state.misconceptions:
             st.warning("当前还有一个需要澄清的理解点。", icon=":material/psychology_alt:")
-        if teacher_view_active:
-            st.metric(
-                "平均证据指数",
-                f"{session.state.average_mastery():.0%}",
-                chart_data=list(session.state.mastery.values()),
-                chart_type="bar",
-            )
-            st.badge(f"当前阶段：{phase_label(session.state.phase)}", icon=":material/route:", color="blue")
+        st.metric(
+            "平均证据指数",
+            f"{session.state.average_mastery():.0%}",
+            chart_data=list(session.state.mastery.values()),
+            chart_type="bar",
+        )
+        st.badge(f"当前阶段：{phase_label(session.state.phase)}", icon=":material/route:", color="blue")
+        with st.expander("掌握度详情", expanded=False, icon=":material/insights:"):
             for point, value in session.state.mastery.items():
                 knowledge_state = session.state.knowledge_states.get(point)
                 level = knowledge_state.last_evidence_level if knowledge_state else "none"
                 st.progress(value, text=f"{point}　{value:.0%} · {EVIDENCE_LABELS.get(level, level)}")
-            st.caption(f"内部关注点：{session.state.next_focus}")
-            current = session.turns[-1]
-            with st.container(border=True):
-                st.caption("本轮教学方案")
-                content_id = current.content_skill_id or current.support_skill_id or "未匹配学科 Skill"
-                strategy_id = current.strategy_skill_id or "学科 Skill 自带讲解策略"
-                st.caption("教什么 · 内容 Skill")
-                st.code(content_id, language=None)
-                st.caption("怎么教 · 教学策略")
-                st.code(strategy_id, language=None)
 
     header = st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="distribute")
     with header:
@@ -416,7 +382,6 @@ else:
         status_label = STATUS_LABELS[str(session.status)]
         st.badge(status_label, color="green" if str(session.status) == "success" else "orange")
         with st.popover("会话操作", icon=":material/more_horiz:"):
-            st.caption("当前会话已自动保存，可以安全地开始新任务。")
             st.download_button(
                 "导出当前会话",
                 data=session.model_dump_json(indent=2),
@@ -428,286 +393,99 @@ else:
             st.button("保存并新建会话", icon=":material/restart_alt:", on_click=reset_teaching_session, width="stretch")
 
     current = session.turns[-1]
-    view_options = ["学生视图", "教师/答辩视图"]
-    if st.session_state.get("live_view_mode") not in view_options:
-        st.session_state.live_view_mode = "学生视图"
-    view_mode = st.segmented_control(
-        "查看模式",
-        view_options,
-        required=True,
-        key="live_view_mode",
-    )
-    teacher_view = view_mode == "教师/答辩视图"
-    if not teacher_view:
-        with st.container(border=True):
-            if session.teaching_route:
-                route = session.teaching_route
-                step = route.current_step()
-                st.caption(f"当前目标 · {step.title}")
-                st.progress(route.completed_count() / len(route.steps))
-                st.write(step.learning_target)
-            elif current.micro_step:
-                st.caption(f"当前目标 · {current.micro_step.focus}")
-            if current.micro_step:
-                st.caption(f"回答方式：{response_mode_label(current.micro_step.response_mode)}")
-    if teacher_view:
-        st.subheader("本轮决策", help="Agent 根据最新学生回答更新状态，再选择本轮教学策略。")
-        st.caption("以下内容用于答辩和调试；学生视图只保留教师话语与回答控件。")
+    with st.container(border=True):
         if session.teaching_route:
-            with st.container(border=True):
-                st.caption(
-                    "会话教学路线 · "
-                    + ("真实 LLM 规划" if session.teaching_route.source == "llm" else "目标字段回退")
-                )
-                route_row = st.container(horizontal=True, vertical_alignment="center")
-                with route_row:
-                    for route_step in session.teaching_route.steps:
-                        color = "green" if route_step.status == "completed" else "blue" if route_step.status == "active" else "gray"
-                        icon = ":material/check:" if route_step.status == "completed" else ":material/radio_button_checked:" if route_step.status == "active" else ":material/radio_button_unchecked:"
-                        st.badge(route_step.title, color=cast(Literal["green", "blue", "gray"], color), icon=icon)
-                st.caption(f"当前路线约束：{session.teaching_route.current_step().learning_target}")
-        decision_flow = st.columns([1, 1, 1], border=True, vertical_alignment="top")
-        with decision_flow[0]:
-            st.badge("学生信号", icon=":material/psychology:", color="orange")
-            if current.state_after.understanding_signals:
-                st.write(current.state_after.understanding_signals[-1])
-            else:
-                st.write("等待更多回答证据")
-        with decision_flow[1]:
-            st.badge("本轮教学策略", icon=":material/route:", color="green")
-            st.markdown(f"**{action_label(current.action_type)}**")
-            st.caption(f"阶段：{phase_label(current.phase)}")
-            if current.skill_plan:
-                st.caption("内容 Skill")
-                st.code(current.skill_plan.content_skill_id or "通用", language=None)
-                st.caption("教学策略")
-                st.code(current.skill_plan.strategy_skill_id or "学科内置", language=None)
-            else:
-                st.caption(f"策略 Skill：{current.selected_skill_id}")
-        with decision_flow[2]:
-            if current.action_type.startswith("terminate_"):
-                st.badge("终止依据", icon=":material/flag:", color="orange")
-                st.write(current.stop_decision or current.policy_rule)
-            else:
-                st.badge("下一步目标", icon=":material/flag:", color="blue")
-                if current.micro_step:
-                    st.write(f"本轮只确认：{current.micro_step.focus}")
-                else:
-                    st.write(current.state_after.next_focus)
-
-        if current.switch_reason and len(session.turns) > 1:
-            previous_turn = session.turns[-2]
-            st.success(
-                skill_switch_message(previous_turn, current),
-                icon=":material/swap_horiz:",
+            route = session.teaching_route
+            step = route.current_step()
+            st.progress(
+                route.completed_count() / len(route.steps),
+                text=f"进度 {route.completed_count()}/{len(route.steps)}",
             )
-
-        if current.micro_step:
-            with st.container(border=True):
-                st.caption("本轮单步教学上下文")
-                micro_columns = st.columns(3)
-                with micro_columns[0]:
-                    st.markdown("**本轮只解决**")
-                    st.write(current.micro_step.focus)
-                with micro_columns[1]:
-                    st.markdown("**当前情境**")
-                    st.write(current.micro_step.context)
-                with micro_columns[2]:
-                    st.markdown("**你只需要回答**")
-                    st.write(current.micro_step.requested_target)
-                st.caption(
-                    f"回答方式：{response_mode_label(current.micro_step.response_mode)}"
-                    + (f" · {current.micro_step.input_hint}" if current.micro_step.input_hint else "")
-                )
-                if session.profile.response_preference != "auto":
-                    st.caption(
-                        f"已按你的偏好固定为：{RESPONSE_PREFERENCE_LABELS[session.profile.response_preference]}"
-                    )
-                if (
-                    current.micro_step.response_mode == "single_choice"
-                    and not has_reliable_choice_options(current.micro_step)
-                ):
-                    st.warning(
-                        "本轮没有生成出可靠的知识选项，因此不会把“我会/我不会”当作学习证据。"
-                        "请在下方重新生成；该操作不增加轮次，也不改变掌握度。",
-                        icon=":material/refresh:",
-                    )
-                if current.micro_step.response_mode == "single_choice" and current.micro_step.options:
-                    st.caption("选项仅用于降低回答门槛；Agent 仍会根据你的选择和后续解释判断掌握度。")
-        if current.student_message:
-            if current.state_after.evidence:
-                latest_evidence = current.state_after.evidence[-1]
-                st.caption(
-                    f"本轮状态证据：{latest_evidence.knowledge_point} · "
-                    f"{EVIDENCE_LABELS.get(latest_evidence.evidence_level, latest_evidence.evidence_level)} · "
-                    f"{latest_evidence.signal_type} · {latest_evidence.reason}"
-                )
-            else:
-                st.caption("本轮状态证据：暂无可映射证据；本轮不提升掌握度，继续收集回答。")
+            st.caption(f"当前教学目标：{step.title}")
+        elif current.micro_step:
+            st.caption(f"当前教学目标：{current.micro_step.focus}")
+        if current.micro_step and current.micro_step.response_mode != "open":
+            st.caption(f"回答方式：{response_mode_label(current.micro_step.response_mode)}")
 
     chat_heading = st.container(horizontal=True, vertical_alignment="center")
     with chat_heading:
         st.subheader("教学对话")
-        st.caption("像聊天一样学习：每次只回答当前这一问，提交后 Agent 才会继续")
 
     for turn_index, turn in enumerate(session.turns):
         if turn.student_message:
             with st.chat_message("user", avatar=":material/person:"):
                 st.write(turn.student_message)
         with st.chat_message("assistant", avatar=":material/school:"):
-            visible_message = (
-                turn.teacher_message
-                if teacher_view
-                else HybridTeachingAgent.student_visible_message(session, turn)
+            st.write(turn.teacher_message)
+            content_id = (
+                turn.content_skill_id
+                or (turn.skill_plan.content_skill_id if turn.skill_plan else None)
+                or "未匹配内容 Skill"
             )
-            st.write(visible_message)
-            if teacher_view and turn is current:
-                with st.container(horizontal=True, vertical_alignment="center"):
-                    st.badge(
-                        f"内容 Skill · {turn.content_skill_id or '通用诊断模式'}",
-                        color="gray",
-                    )
-                    st.badge(
-                        f"教学策略 · {turn.strategy_skill_id or '通用策略'}",
-                        color="green",
-                    )
-                    st.badge(f"教学动作 · {action_label(turn.action_type)}", color="blue")
-            if teacher_view and turn.switch_reason and turn_index > 0 and turn is not current:
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.badge(f"内容 Skill · {content_id}", color="gray")
+                st.badge(f"教学动作 · {action_label(turn.action_type)}", color="green")
+            if turn.switch_reason and turn_index > 0:
                 previous_turn = session.turns[turn_index - 1]
                 st.success(
                     skill_switch_message(previous_turn, turn),
                     icon=":material/swap_horiz:",
                 )
-            if teacher_view and turn is current:
-                with st.expander(
-                    "专业决策证据",
-                    expanded=False,
-                    icon=":material/manage_search:",
-                ):
-                    st.write(turn.selection_reason)
-                    if turn.micro_step:
-                        st.caption("单步教学计划")
-                        st.json(turn.micro_step.model_dump(mode="json"), expanded=False)
-                    if turn.teacher_review:
-                        review = turn.teacher_review
-                        review_status = "通过" if review.valid else "未通过/已回退"
-                        st.caption(
-                            f"输出复核：{review_status} · "
-                            f"单步={review.one_step} · 情境唯一={review.one_context} · "
-                            f"单问题={review.one_question} · 事实一致={review.fact_consistent} · "
-                            f"上下文连续={review.same_context} · "
-                            f"回答模式={review.response_mode_valid} · 选项={review.options_valid}"
-                        )
-                        if review.issues:
-                            st.warning("；".join(review.issues))
-                    if turn.generation_audit:
-                        st.caption("生成审计：")
-                        st.json(turn.generation_audit, expanded=False)
-                    if turn.llm_trace:
-                        st.caption("LLM 调用审计：")
-                        st.dataframe(
-                            [trace.model_dump(mode="json") for trace in turn.llm_trace],
-                            hide_index=True,
-                            column_config={
-                                "latency_ms": st.column_config.NumberColumn("耗时（ms）"),
-                                "attempts": st.column_config.NumberColumn("尝试次数"),
-                            },
-                        )
-                    evidence_row = st.container(horizontal=True)
-                    with evidence_row:
-                        st.badge(f"决策来源 · {decision_mode_label(turn.decision_mode)}", color="blue")
-                        if turn.policy_rule:
-                            st.badge(f"规则 · {turn.policy_rule}", color="gray")
-                    if turn.candidate_skill_ids:
-                        st.info(
-                            "**内容 Skill 资格符合：** "
-                            + "、".join(f"`{skill_id}`" for skill_id in turn.candidate_skill_ids)
-                            + "\n\n这里的“资格符合”只表示它适合提供学科内容，"
-                            "最终采用的教学策略以上方绿色标签为准。",
-                            icon=":material/menu_book:",
-                        )
+            with st.expander(
+                f"本轮教学证据 · {action_label(turn.action_type)}",
+                expanded=False,
+                icon=":material/manage_search:",
+            ):
+                if turn.state_after.evidence:
+                    latest = turn.state_after.evidence[-1]
                     st.caption(
-                        f"本轮教学方案：内容 Skill `{turn.content_skill_id or '通用诊断模式'}` × "
-                        f"教学策略 `{turn.strategy_skill_id or '通用策略'}`。"
+                        f"证据：{latest.knowledge_point} · "
+                        f"{EVIDENCE_LABELS.get(latest.evidence_level, latest.evidence_level)}"
                     )
-                    if turn.fallback_reason:
-                        st.warning(turn.fallback_reason)
-                    if turn.candidate_audit:
-                        passed = [item for item in turn.candidate_audit if item.get("passed")]
-                        rejected = [item for item in turn.candidate_audit if not item.get("passed")]
-                        st.caption(f"内容 Skill 资格检查：{len(passed)} 个符合，{len(rejected)} 个不符合")
-                        audit_rows = [
-                            {
-                                "Skill": item["skill_id"],
-                                "资格判断": "符合" if item.get("passed") else "不符合",
-                                "课程": (
-                                    "—" if item.get("checks", {}).get("course") is None
-                                    else "通过" if item.get("checks", {}).get("course") else "拒绝"
-                                ),
-                                "目标": (
-                                    "—" if item.get("checks", {}).get("goal") is None
-                                    else "通过" if item.get("checks", {}).get("goal") else "拒绝"
-                                ),
-                                "触发": (
-                                    "—" if item.get("checks", {}).get("trigger") is None
-                                    else "通过" if item.get("checks", {}).get("trigger") else "拒绝"
-                                ),
-                                "前置": (
-                                    "—" if item.get("checks", {}).get("precondition") is None
-                                    else "通过" if item.get("checks", {}).get("precondition") else "拒绝"
-                                ),
-                                "规则分": item.get("score", 0.0),
-                                "依据": "；".join(item.get("reasons", [])),
-                            }
-                            for item in turn.candidate_audit
-                        ]
-                        st.dataframe(audit_rows, hide_index=True)
-                    if turn.state_after.evidence:
-                        latest = turn.state_after.evidence[-1]
-                        st.caption(
-                            f"状态证据：{latest.knowledge_point} · "
-                            f"{EVIDENCE_LABELS.get(latest.evidence_level, latest.evidence_level)} · "
-                            f"{latest.signal_type} · {latest.reason}"
-                        )
-                    if turn.student_message and turn.state_before.mastery:
-                        st.caption("掌握度变化：")
-                        changes = st.container(horizontal=True, gap="small")
-                        for point, after_value in turn.state_after.mastery.items():
-                            before_value = turn.state_before.mastery.get(point, after_value)
-                            delta = after_value - before_value
-                            if abs(delta) < 0.0005:
-                                continue
-                            knowledge_state = turn.state_after.knowledge_states.get(point)
-                            level = knowledge_state.last_evidence_level if knowledge_state else "none"
-                            with changes:
-                                st.metric(
-                                    point,
-                                    f"{after_value:.0%}",
-                                    delta=f"{delta:+.1%} · {EVIDENCE_LABELS.get(level, level)}",
-                                )
-                        if not any(
-                            abs(after_value - turn.state_before.mastery.get(point, after_value)) >= 0.0005
-                            for point, after_value in turn.state_after.mastery.items()
-                        ):
-                            st.caption("本轮没有产生可确认的掌握度提升；系统保留回答证据，等待下一次验证。")
-                    if turn.switch_reason:
-                        st.info(turn.switch_reason)
-                    st.write(f"下一关注点：{turn.state_after.next_focus}")
+                st.caption(
+                    "困难识别："
+                    + DIFFICULTY_LABELS.get(turn.difficulty_type, turn.difficulty_type or "暂未判断")
+                )
+                if turn.student_message and turn.state_before.mastery:
+                    changes = st.container(horizontal=True, gap="small")
+                    has_change = False
+                    for point, after_value in turn.state_after.mastery.items():
+                        before_value = turn.state_before.mastery.get(point, after_value)
+                        delta = after_value - before_value
+                        if abs(delta) < 0.0005:
+                            continue
+                        has_change = True
+                        knowledge_state = turn.state_after.knowledge_states.get(point)
+                        level = knowledge_state.last_evidence_level if knowledge_state else "none"
+                        with changes:
+                            st.metric(
+                                point,
+                                f"{after_value:.0%}",
+                                delta=f"{delta:+.1%} · {EVIDENCE_LABELS.get(level, level)}",
+                            )
+                    if not has_change:
+                        st.caption("掌握度暂未变化，等待下一次验证。")
+                with st.expander("查看详细记录", expanded=False):
+                    st.caption(f"选择理由：{turn.selection_reason or '根据当前状态自动选择。'}")
+                    st.caption(f"决策来源：{decision_mode_label(turn.decision_mode)}")
+                    if turn.micro_step:
+                        st.caption(f"关注：{turn.micro_step.focus}")
+                        st.caption(f"情境：{turn.micro_step.context}")
+                        st.caption(f"回答方式：{response_mode_label(turn.micro_step.response_mode)}")
+                    st.caption(f"下一关注点：{turn.state_after.next_focus}")
                     if turn.state_after.understanding_signals:
-                        st.write("理解信号：" + "；".join(turn.state_after.understanding_signals))
+                        st.caption("理解信号：" + "；".join(turn.state_after.understanding_signals))
                     if turn.state_after.misconceptions:
-                        st.write("误解证据：")
-                        for item in turn.state_after.misconceptions:
-                            st.caption(f"{item.label}（累计 {item.count} 次）— {item.evidence}")
-                    st.write(f"终止判断：{turn.stop_decision}")
+                        st.caption(
+                            "误解证据："
+                            + "；".join(f"{item.label}（{item.count} 次）" for item in turn.state_after.misconceptions)
+                        )
+                if turn.action_type.startswith("terminate_"):
+                    st.caption(f"终止判断：{turn.stop_decision or turn.policy_rule}")
 
     if str(session.status) == "active":
         suggestion_key = f"ai_demo_replies_{session.session_id}_{teaching_rounds}"
         with st.expander("AI 推荐演示回答", expanded=False, icon=":material/auto_awesome:"):
-            st.caption(
-                "根据当前教师问题、教学路线和最近对话，由已配置的 LLM 生成。"
-                "它只帮你准备学生回答，不会自动提交。"
-            )
             if st.button(
                 "生成 3 条 AI 推荐回答",
                 icon=":material/auto_awesome:",
@@ -737,8 +515,6 @@ else:
                 )
                 selected = suggestion_map[selected_id]
                 st.info(selected["reply"], icon=":material/chat:")
-                if teacher_view:
-                    st.caption(f"演示信号（仅教师视图）：{selected.get('intended_signal', '未标注')}")
                 if st.button(
                     "使用所选回答",
                     type="primary",
@@ -746,7 +522,6 @@ else:
                     key=f"use_demo_reply_{session.session_id}_{teaching_rounds}",
                 ):
                     st.session_state.pending_demo_reply = selected["reply"]
-                st.caption("点击后会像真实学生提交一样进入 Agent；只有提交后才会更新状态和轮次。")
         pending_demo_reply = st.session_state.pop("pending_demo_reply", None)
         response_mode = current.micro_step.response_mode if current.micro_step else "open"
         submitted_reply = pending_demo_reply
