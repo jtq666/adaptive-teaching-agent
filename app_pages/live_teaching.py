@@ -6,7 +6,7 @@ import streamlit as st
 
 from src.agent import HybridTeachingAgent
 from src.config import get_agent_settings
-from src.demo_reply_generator import DemoReplyGenerator
+from src.demo_reply_generator import DEMO_SIGNAL_LABELS, DEMO_TARGET_LABELS, DemoReplyGenerator
 from src.llm import LLMUnavailableError
 from src.models import ConversationTurn, StudentProfile, StudentState, TeachingGoal
 from src.ui import (
@@ -495,8 +495,17 @@ else:
                     st.caption(f"终止判断：{turn.stop_decision or turn.policy_rule}")
 
     if str(session.status) == "active":
-        suggestion_key = f"ai_demo_replies_{session.session_id}_{teaching_rounds}"
         with st.expander("AI 推荐演示回答", expanded=False, icon=":material/auto_awesome:"):
+            target_signal = st.selectbox(
+                "本次希望演示的状态",
+                list(DEMO_TARGET_LABELS),
+                format_func=lambda value: DEMO_TARGET_LABELS[value],
+                key=f"demo_target_signal_{session.session_id}_{teaching_rounds}",
+            )
+            st.caption("这是给演示者的生成提示，不会强制 Agent 采用对应动作；提交后仍由模型正常判断。")
+            suggestion_key = (
+                f"ai_demo_replies_{session.session_id}_{teaching_rounds}_{target_signal}"
+            )
             if st.button(
                 "生成 3 条 AI 推荐回答",
                 icon=":material/auto_awesome:",
@@ -504,7 +513,10 @@ else:
             ):
                 try:
                     with st.spinner("正在根据当前上下文生成推荐回答…"):
-                        suggestions = DemoReplyGenerator(live_agent().llm).generate(session)
+                        suggestions = DemoReplyGenerator(live_agent().llm).generate(
+                            session,
+                            target_signal=target_signal,
+                        )
                     st.session_state[suggestion_key] = [item.model_dump(mode="json") for item in suggestions]
                     st.session_state[f"{suggestion_key}_selected"] = suggestions[0].suggestion_id
                     set_notice("已生成当前问题的 AI 推荐回答。", ":material/auto_awesome:")
@@ -522,9 +534,16 @@ else:
                     "选择一条回答",
                     suggestion_ids,
                     key=f"{suggestion_key}_selected",
-                    format_func=lambda item_id: suggestion_map[item_id]["label"],
+                    format_func=lambda item_id: (
+                        f"{DEMO_SIGNAL_LABELS.get(suggestion_map[item_id].get('intended_signal', ''), '演示回答')}"
+                        f" · {suggestion_map[item_id]['label']}"
+                    ),
                 )
                 selected = suggestion_map[selected_id]
+                st.caption(
+                    "模型标注的演示意图："
+                    + DEMO_SIGNAL_LABELS.get(selected.get("intended_signal", ""), "未标注")
+                )
                 st.info(selected["reply"], icon=":material/chat:")
                 if st.button(
                     "使用所选回答",
