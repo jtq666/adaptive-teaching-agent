@@ -125,7 +125,7 @@ def test_answer_first_bridge_responds_to_force_concern_and_keeps_facts_consisten
 
     assert "速度变化" in generation.message
     assert "加速度" in generation.message
-    assert "合力不为零" in generation.message
+    assert "不为零" in generation.message
     assert "判断依据" not in generation.message
     assert generation.message.count("？") + generation.message.count("?") == 1
     assert generation.audit["answer_first"] is True
@@ -182,6 +182,132 @@ def test_answer_first_bridge_does_not_invent_friction_when_prompt_excludes_horiz
 
     assert "两种情形混在一起" in generation.message
     assert "题目有没有说明脚底和地板之间存在摩擦力" in generation.message
+
+
+def test_derivative_concern_gets_a_concrete_limit_bridge(tmp_path):
+    agent = make_agent(tmp_path, simple_teaching_mode=True)
+    goal = TeachingGoal(
+        course="高等数学",
+        topic="导数的极限定义",
+        objective="从平均变化率理解瞬时变化率",
+        knowledge_points=["平均变化率", "极限思想", "瞬时变化率"],
+    )
+    profile = StudentProfile(name="高数学生", level="基础薄弱", prior_knowledge=["函数", "斜率"])
+    state = StudentState(
+        mastery={"平均变化率": 0.4, "极限思想": 0.2, "瞬时变化率": 0.2},
+        next_focus="极限思想",
+    )
+    session = agent.start_session(goal, profile, state)
+    generation = agent._generate_simple_teacher_message(
+        session,
+        agent.library.get("derivative_intro_via_slope_limit_v1"),
+        agent.library.get("diagnostic_questioning_v1"),
+        "diagnostic",
+        "我有点不明白，为什么把时间间隔变小就能得到某一时刻的速度？是不是取一个特别小的数就行？",
+    )
+    assert "固定的小区间" in generation.message
+    assert "趋近于零" in generation.message
+    assert "哪一个条件最直接" not in generation.message
+    assert generation.message.count("？") + generation.message.count("?") == 1
+
+
+def test_physics_force_guard_rejects_forward_force_during_braking(tmp_path):
+    agent = make_agent(tmp_path, simple_teaching_mode=True)
+    session = agent.start_session(*_make_physics_inputs())
+    session.turns[-1].teacher_message = "公交车正在向前行驶并突然急刹车，车速正在减小。"
+    subject = agent.library.get("newtons_first_law_via_engineering_examples_v1")
+
+    class WrongDirectionClient:
+        available = True
+
+        def structured(self, *args, **kwargs):
+            return {
+                "direct_answer": "乘客速度变化，所以合力不为零，合力方向向前。",
+                "feedback": "乘客速度变化，所以合力不为零，合力方向向前。",
+                "question": "乘客受到的合力方向是什么？",
+                "context": "公交车急刹车",
+                "known_fact": "车速减小",
+                "expected_signal": "学生能判断方向",
+            }
+
+    agent.llm = WrongDirectionClient()
+    generation = agent._generate_simple_teacher_message(
+        session,
+        subject,
+        agent.library.get("diagnostic_questioning_v1"),
+        "diagnostic",
+        "合力到底算不算零？是不是脚底有摩擦力？",
+    )
+    assert "合力方向向前" not in generation.message
+    assert "速度是否变化" in generation.message
+    assert "向后的加速度" in generation.message
+    assert "不为零" in generation.message
+
+
+def test_simple_fallback_records_that_it_was_not_llm_generated(tmp_path):
+    agent = make_agent(tmp_path, simple_teaching_mode=True)
+    session = agent.start_session(*_make_physics_inputs())
+    assert session.turns[-1].generation_audit["llm_generated"] is False
+
+
+def test_simple_flow_does_not_update_a_future_knowledge_point(tmp_path):
+    class FuturePointClient:
+        available = True
+
+        def structured(self, *args, **kwargs):
+            return {
+                "mastery_updates": {"惯性": 0.9, "合力与运动变化": 0.99},
+                "evidence_levels": {"惯性": "correct", "合力与运动变化": "explained"},
+                "misconceptions": [],
+                "understanding_signals": ["模型返回了两个知识点"],
+                "next_focus": "合力与运动变化",
+                "verification_passed": False,
+                "progress": "improved",
+                "affected_points": ["惯性", "合力与运动变化"],
+                "confidence": 0.9,
+                "evidence_reason": "测试越界映射",
+            }
+
+    agent = HybridTeachingAgent(
+        library=SkillLibrary(),
+        llm=FuturePointClient(),
+        store=SessionStore(tmp_path),
+        settings={"simple_teaching_mode": True, "max_rounds": 8, "mastery_threshold": 0.8},
+    )
+    session = agent.start_session(*_make_physics_inputs())
+    before = dict(session.state.mastery)
+    session = agent.handle_student_message(session, "我先回答当前问题")
+    assert session.state.mastery["合力与运动变化"] == before["合力与运动变化"]
+    assert session.state.mastery["惯性"] > before["惯性"]
+
+
+def test_simple_flow_handles_question_mark_when_detecting_repeated_target(tmp_path):
+    agent = make_agent(tmp_path, simple_teaching_mode=True)
+    session = agent.start_session(*make_inputs())
+    previous = session.turns[-1].micro_step
+    assert previous is not None
+    generation = agent._build_simple_generation(
+        session,
+        {
+            "feedback": "继续看当前情境。",
+            "question": previous.requested_target,
+            "context": previous.context,
+            "known_fact": previous.known_fact,
+            "expected_signal": previous.expected_signal,
+        },
+        "subject_instruction",
+    )
+    assert generation.micro_step is not None
+    assert generation.micro_step.requested_target != previous.requested_target
+
+
+def test_array_example_is_not_mistaken_for_multiple_assignments(tmp_path):
+    agent = make_agent(tmp_path)
+    message = (
+        "好的，我们来看这个例子：数组是 [1, 3, 5, 7, 9]，目标值是 5。"
+        "如果采用左闭右闭区间，初始时 left 应该设为 0，right 应该设为 4。"
+    )
+    assert agent._contains_multiple_value_scenarios(message) is False
 
 
 def test_public_agent_uses_four_internal_roles_and_one_audited_output(tmp_path):

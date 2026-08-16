@@ -139,6 +139,9 @@ class HybridTeachingAgent:
         calls_before = getattr(self.llm, "total_calls", None)
         current_skill = session.turns[-1].selected_skill_id if session.turns else ""
         previous_teacher_message = session.turns[-1].teacher_message if session.turns else ""
+        active_knowledge_point = ""
+        if self._simple_mode_enabled() and session.teaching_route:
+            active_knowledge_point = session.teaching_route.current_step().knowledge_point
         after = self.diagnosis_role.execute(
             session.goal,
             session.profile,
@@ -147,6 +150,7 @@ class HybridTeachingAgent:
             current_skill,
             round_index=session.answered_rounds() + 1,
             previous_teacher_message=previous_teacher_message,
+            active_knowledge_point=active_knowledge_point,
         )
         session.state = after
         if session.teaching_route:
@@ -617,6 +621,11 @@ class HybridTeachingAgent:
             kind = "force_presence"
         elif any(cue in text for cue in ("前倾", "向前", "往前")) and "为什么" in text:
             kind = "inertia_forward"
+        elif any(
+            cue in text
+            for cue in ("极限", "时间间隔", "平均变化率", "瞬时速度", "瞬时变化率", "割线", "切线", "导数")
+        ):
+            kind = "derivative_limit"
         else:
             kind = "generic"
         return {"kind": kind, "text": message.strip()}
@@ -639,9 +648,20 @@ class HybridTeachingAgent:
             for cue in ("先把你刚才卡住的一个区别说清楚", "你的回答会作为我们继续学习的依据", "我们先一步一步来")
         )
 
+    @staticmethod
+    def _trim_simple_feedback(feedback: str) -> str:
+        """Keep the first direct explanation when a draft hides another task."""
+        parts = [part.strip() for part in re.split(r"[。！？!?]\s*|\n+", feedback or "") if part.strip()]
+        return parts[0] if parts else ""
+
     def _context_has_floor_friction(self, session: TeachingSession) -> bool:
         context = "\n".join(turn.teacher_message for turn in session.turns)
         return any(cue in context for cue in ("脚底", "地板", "摩擦力", "摩擦"))
+
+    @staticmethod
+    def _context_has_braking(session: TeachingSession) -> bool:
+        context = "\n".join(turn.teacher_message for turn in session.turns)
+        return any(cue in context for cue in ("刹车", "急刹", "减速", "停下"))
 
     def _concern_answer_is_sufficient(self, concern: dict[str, str], answer: str) -> bool:
         text = re.sub(r"\s+", "", answer or "")
@@ -660,7 +680,27 @@ class HybridTeachingAgent:
             return "力" in text and any(cue in text for cue in ("受到", "摩擦", "合力"))
         if kind == "inertia_forward":
             return any(cue in text for cue in ("惯性", "上半身", "前倾", "原来的速度"))
+        if kind == "derivative_limit":
+            return "极限" in text and any(cue in text for cue in ("趋近", "接近", "平均变化率", "瞬时"))
         return True
+
+    def _concern_answer_conflicts_with_context(
+        self,
+        session: TeachingSession,
+        concern: dict[str, str],
+        answer: str,
+    ) -> bool:
+        """Catch a high-confidence braking-direction error in physics replies."""
+        if concern.get("kind") != "force_zero":
+            return False
+        context = "".join(turn.teacher_message for turn in session.turns)
+        if not any(cue in context for cue in ("刹车", "急刹", "减速")):
+            return False
+        normalized = re.sub(r"\s+", "", answer or "")
+        return any(
+            cue in normalized
+            for cue in ("合力向前", "合力方向向前", "加速度向前", "加速度方向向前", "受到向前的力")
+        )
 
     def _concern_fallback_payload(
         self,
@@ -676,6 +716,13 @@ class HybridTeachingAgent:
                 "因此有加速度，乘客受到的合力不为零。"
             )
             question = "现在只判断：这个使乘客减速的水平力主要来自哪里？"
+        elif kind == "force_zero" and self._context_has_braking(session):
+            direct_answer = (
+                "先看乘客的速度是否变化：如果脚底和地板的摩擦力使乘客随车减速，"
+                "乘客有向后的加速度，合力就不为零且方向向后；只有题设明确没有水平力时，"
+                "水平方向合力才为零。"
+            )
+            question = "当前题设有没有说明脚底和地板之间存在摩擦力？"
         elif kind in {"force_zero", "force_presence", "foot_friction"}:
             direct_answer = (
                 "要先区分题设。若题目明确说乘客没有受到水平方向的力，水平方向合力就是零；"
@@ -688,6 +735,12 @@ class HybridTeachingAgent:
                 "上半身暂时保持原来的向前运动状态。"
             )
             question = "现在只判断：前倾主要说明身体哪一部分没有立即跟着车减速？"
+        elif kind == "derivative_limit":
+            direct_answer = (
+                "不是把时间间隔换成某个特别小的固定数；固定的小区间仍然只能得到平均变化率。"
+                "只有让时间间隔趋近于零，平均变化率的极限才表示这一时刻的瞬时变化率。"
+            )
+            question = "当时间间隔从0.1秒缩小到0.01秒时，你判断的是一个固定小区间，还是趋近于0的极限过程？"
         else:
             direct_answer = "先回答你刚才提出的具体疑问，不急着进入下一步；关键要看当前情境中给出的受力和运动变化。"
             focus = route_step.knowledge_point if route_step else self._focus_label(session)
@@ -842,6 +895,11 @@ class HybridTeachingAgent:
         previous_question = previous_turn.teacher_message if previous_turn else "无"
         route_target = route_step.learning_target if route_step else session.state.next_focus or session.goal.objective
         concern = self._student_concern(student_message)
+        previous_context = (
+            previous_turn.micro_step.context
+            if previous_turn and previous_turn.micro_step
+            else "无"
+        )
         if self.llm.available:
             try:
                 data = self.llm.structured(
@@ -856,12 +914,16 @@ class HybridTeachingAgent:
                         "如果当前是迁移验证，必须换一个新情境。"
                         "若学生问的是‘速度是否变化、是否有加速度、合力是否为零’，优先建立‘速度变化→有加速度→合力不为零’的链条；"
                         "若当前情境已给出脚底与地板摩擦力，就不能回答成‘乘客没有水平力’。"
+                        "除非当前教学动作是迁移验证，必须沿用上一轮微步骤的情境和表示法；"
+                        "不能因为知识点切换就另造一个例子、改变运动方向或把公交车急刹车改成加速。"
+                        "公交车站立且没有扶手的情境不得新增安全带、座椅或其他题设没有出现的装置。"
                     ),
                     (
                         f"课程：{session.goal.course}\n主题：{session.goal.topic}\n教学目标：{session.goal.objective}\n"
                         f"当前路线目标：{route_target}\n当前教学动作：{action_type}\n"
                         f"学生状态：{session.state.model_dump_json()}\n"
                         f"上一轮教师话语：{previous_question}\n学生刚才的话：{student_message or '尚未回答'}\n"
+                        f"上一轮微步骤情境（非迁移时必须沿用）：{previous_context}\n"
                         f"学生明确疑问（若为空则没有）：{concern.get('text', '无')}\n"
                         "请输出反馈和一个问题。"
                     ),
@@ -880,6 +942,7 @@ class HybridTeachingAgent:
         action_type: str,
         student_message: str = "",
         enforce_concern: bool = True,
+        llm_generated: bool = True,
     ) -> MessageGeneration:
         route_step = session.teaching_route.current_step() if session.teaching_route else None
         focus = route_step.knowledge_point if route_step else self._focus_label(session)
@@ -892,6 +955,7 @@ class HybridTeachingAgent:
         if enforce_concern and concern and (
             not direct_answer
             or not self._concern_answer_is_sufficient(concern, direct_answer)
+            or self._concern_answer_conflicts_with_context(session, concern, direct_answer)
             or self._is_abstract_concern_question(question)
         ):
             fallback = self._build_simple_generation(
@@ -900,17 +964,33 @@ class HybridTeachingAgent:
                 action_type,
                 student_message,
                 enforce_concern=False,
+                llm_generated=False,
             )
             fallback.fallback_reason = "answer_first_concern_guard"
             fallback.audit = {**(fallback.audit or {}), "fallback_reason": fallback.fallback_reason}
             return fallback
         feedback = re.sub(r"[？?]+", "。", feedback).strip()
+        if self._contains_multiple_requests(question):
+            question = self._single_target(question, focus)
+        if self._contains_multiple_requests(f"{feedback}。{question}"):
+            feedback = self._trim_simple_feedback(feedback)
         if route_step is not None and route_step.kind == "transfer":
             prefix = "再换一个" if session.turns and session.turns[-1].action_type == "transfer" else "换一个"
             question = f"请{prefix}不同于刚才的新情境，说明“{focus}”如何表现"
         elif session.turns:
             previous = session.turns[-1].teacher_message
-            previous_question = re.split(r"[。！？!?]\s*", previous.strip())[-1]
+            previous_parts = [
+                part.strip()
+                for part in re.split(r"[。！？!?]\s*", previous.strip())
+                if part.strip()
+            ]
+            previous_question = (
+                session.turns[-1].micro_step.requested_target
+                if session.turns[-1].micro_step is not None
+                else previous_parts[-1]
+                if previous_parts
+                else previous.strip()
+            )
             similarity = SequenceMatcher(None, question, previous_question).ratio()
             if question in previous or previous_question in question or similarity >= 0.72:
                 if concern:
@@ -919,9 +999,31 @@ class HybridTeachingAgent:
                 elif any(cue in student_message for cue in ("有没有受到力", "到底有没有力", "受到力")):
                     question = "现在只判断：身体在水平方向是否受到向后的力"
                 else:
-                    question = f"请只说明“{focus}”这一次最关键的一个区别"
+                    repeated_step = TeachingMicroStep(
+                        focus=focus,
+                        context=(route_step.title if route_step else session.goal.topic),
+                        known_fact="",
+                        requested_target=question,
+                        representation="用自己的话回答",
+                        expected_signal="学生能回答当前问题",
+                        step_index=(
+                            session.turns[-1].micro_step.step_index + 1
+                            if session.turns[-1].micro_step
+                            else 1
+                        ),
+                    )
+                    question = self._advance_repeated_target(session, repeated_step).requested_target
+        if self._contains_multiple_requests(f"{feedback}。{question}"):
+            feedback = self._trim_simple_feedback(feedback)
         question = re.sub(r"[。！？!?]+", "。", question).strip().rstrip("。") + "？"
         context = str(data.get("context", "")).strip() or (route_step.title if route_step else session.goal.topic)
+        context_locked = bool(
+            session.turns
+            and session.turns[-1].micro_step is not None
+            and (route_step is None or route_step.kind != "transfer")
+        )
+        if context_locked and session.turns[-1].micro_step is not None:
+            context = session.turns[-1].micro_step.context
         known_fact = str(data.get("known_fact", "")).strip()
         expected = str(data.get("expected_signal", "")).strip() or "学生能回答当前问题"
         step = TeachingMicroStep(
@@ -953,12 +1055,13 @@ class HybridTeachingAgent:
                 "architecture": "single_agent_simple_flow",
                 "flow": ["understand_student", "brief_feedback", "one_question"],
                 "action_type": action_type,
-                "llm_generated": True,
+                "llm_generated": llm_generated,
                 "student_facing_feedback": bool(feedback),
                 "student_concern": concern.get("text", ""),
                 "student_concern_kind": concern.get("kind", ""),
                 "answer_first": bool(concern),
                 "concern_addressed": bool(concern and direct_answer) or not concern,
+                "context_locked": context_locked,
             },
         )
 
@@ -991,7 +1094,14 @@ class HybridTeachingAgent:
                 "known_fact": "",
                 "expected_signal": "学生能回答当前问题",
             }
-        return self._build_simple_generation(session, payload, action_type, student_message, enforce_concern=False)
+        return self._build_simple_generation(
+            session,
+            payload,
+            action_type,
+            student_message,
+            enforce_concern=False,
+            llm_generated=False,
+        )
 
     def _decide(self, session: TeachingSession, student_message: str, initial: bool) -> AgentDecision:
         if self._simple_mode_enabled():
@@ -2009,8 +2119,10 @@ class HybridTeachingAgent:
         # discourse structure instead of storing any subject answer.
         clauses = [item.strip() for item in re.split(r"[。；;\n]+", text) if item.strip()]
         task_verbs = ("判断", "选择", "写出", "指出", "计算", "求出", "说明", "解释", "描述")
-        interrogatives = ("为什么", "如何", "什么", "是否", "哪一个", "多少", "怎样")
+        interrogatives = ("为什么", "如何", "什么", "是否", "哪一个", "多少", "怎样", "吗", "呢")
         if len(clauses) >= 2:
+            if sum(any(marker in clause for marker in interrogatives) for clause in clauses) >= 2:
+                return True
             for index, clause in enumerate(clauses[:-1]):
                 # “这说明你已经理解……” is explanatory feedback, not a
                 # second request.  Strip that discourse use before looking
@@ -2018,6 +2130,12 @@ class HybridTeachingAgent:
                 # multi-question turn.
                 task_clause = re.sub(r"(?:这|它|上述|这一点)(?:也|就|便)?说明", "", clause)
                 if any(verb in task_clause for verb in task_verbs) and any(
+                    marker in later
+                    for later in clauses[index + 1 :]
+                    for marker in interrogatives
+                ):
+                    return True
+                if re.search(r"(?:是|为).{0,20}还是", task_clause) and any(
                     marker in later
                     for later in clauses[index + 1 :]
                     for marker in interrogatives
@@ -2040,9 +2158,20 @@ class HybridTeachingAgent:
             r"\s*(?:=|是|为|等于|设为)\s*"
             r"(?P<value>\[[^\]]*\]|[-+]?\d+(?:\.\d+)?|[A-Za-z_][A-Za-z0-9_]*)"
         )
+        instruction_words = {
+            "应该",
+            "应当",
+            "可以",
+            "需要",
+            "必须",
+            "初始时",
+            "然后",
+            "最后",
+        }
         assignments = [
             (match.group("name").lower(), match.group("value"))
             for match in assignment.finditer(text)
+            if not any(word in match.group("name").lower() for word in instruction_words)
         ]
         values_by_name: dict[str, set[str]] = {}
         for name, value in assignments:

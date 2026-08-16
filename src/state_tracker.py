@@ -234,6 +234,7 @@ class StateTracker:
         current_skill_id: str = "",
         round_index: int = 0,
         previous_teacher_message: str = "",
+        active_knowledge_point: str = "",
     ) -> StudentState:
         before = deepcopy(state)
         assessment = self._assess(
@@ -243,6 +244,35 @@ class StateTracker:
             student_message,
             previous_teacher_message=previous_teacher_message,
         )
+        # In the live single-step flow, an LLM may mention a future concept in
+        # ``affected_points`` even when the current question is about another
+        # point. Prompts discourage that behavior, but prompts are not a
+        # state-integrity boundary. Keep evidence and mastery updates scoped to
+        # the active route step; legacy/evaluation callers without an active
+        # point retain the broader historical behavior.
+        if active_knowledge_point in goal.knowledge_points:
+            reported_points = list(assessment.affected_points)
+            assessment.affected_points = [
+                point for point in reported_points if point == active_knowledge_point
+            ]
+            assessment.mastery_updates = {
+                point: value
+                for point, value in assessment.mastery_updates.items()
+                if point == active_knowledge_point
+            }
+            assessment.evidence_levels = {
+                point: value
+                for point, value in assessment.evidence_levels.items()
+                if point == active_knowledge_point
+            }
+            if reported_points and not assessment.affected_points:
+                # The answer was mapped outside the active micro-step. Do not
+                # turn that mismatch into evidence or a misconception on the
+                # current point; wait for a response to the actual question.
+                assessment.progress = "unchanged"
+                assessment.misconceptions = []
+                assessment.understanding_signals = ["回答涉及其他知识点，暂不更新当前小步"]
+                assessment.evidence_reason = "状态更新被单步路线边界拦截"
         # Apply the generic repair gate again at the state boundary. The
         # provider may time out or return an inconsistent intermediate review;
         # a clear contrastive correction with shared context must still be
@@ -281,7 +311,11 @@ class StateTracker:
             # no affected_points is different: it is uncertainty, not evidence
             # for the first knowledge point, and must not move mastery.
             affected = goal.knowledge_points[:1]
-        evidence_points = affected or goal.knowledge_points[:1]
+        evidence_points = (
+            affected
+            if active_knowledge_point in goal.knowledge_points
+            else affected or goal.knowledge_points[:1]
+        )
 
         # The transition below resolves active misconceptions when this turn
         # contains improvement evidence. Canonicalize the visible explanation

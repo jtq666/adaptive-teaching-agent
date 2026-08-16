@@ -44,6 +44,7 @@ class StudentDiagnosisRole:
         *,
         round_index: int,
         previous_teacher_message: str,
+        active_knowledge_point: str = "",
     ) -> StudentState:
         return self.tracker.update(
             goal,
@@ -53,6 +54,7 @@ class StudentDiagnosisRole:
             current_skill_id,
             round_index=round_index,
             previous_teacher_message=previous_teacher_message,
+            active_knowledge_point=active_knowledge_point,
         )
 
 
