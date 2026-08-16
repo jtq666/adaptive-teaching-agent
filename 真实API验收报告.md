@@ -22,6 +22,19 @@ python scripts/online_adaptive_teaching_acceptance.py
 
 脱敏结果保存在 `output/evaluations/online_adaptive_teaching_acceptance.json`。自然语言输出会随模型采样变化，验收只检查动作边界、内容 Skill 合法性、单次调用和回复长度，不要求逐字一致。
 
+## V6 两个答辩演示脚本验收
+
+2026-08-16 使用真实 `deepseek-chat` 跑通：
+
+```powershell
+python scripts\demo_physics.py
+python scripts\demo_derivative.py
+```
+
+- 物理脚本：真实输入触发 `correct → explain/transfer → transfer`，掌握度达到阈值后会显示 `success`；结果保存到 `output/evaluations/demo_physics_run.json`。
+- 导数脚本：真实输入连续触发 3 轮 `scaffold`，困难类型为 `symbol_notation`，没有误判为 `correct`；结果保存到 `output/evaluations/demo_derivative_run.json`。
+- 两个脚本均检查内容 Skill、`adaptive_teaching_v1`、每轮 1 次 API 调用、教师回复不超过 100 字，并在 API 回退时直接失败。
+
 以下旧版多案例报告保留作历史记录，不代表 V6 实时教学链路的当前架构。
 
 ## 验收规模

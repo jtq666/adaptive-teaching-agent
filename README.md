@@ -63,7 +63,11 @@ python scripts/online_physics_route_acceptance.py
 python scripts/online_demo_reply_acceptance.py
 python scripts/online_fast_live_acceptance.py
 python scripts/online_adaptive_teaching_acceptance.py
+python scripts/demo_physics.py
+python scripts/demo_derivative.py
 ```
+
+答辩现场直接照《教学演示文档.md》输入。物理脚本会跑通 `correct → transfer → success`；导数脚本会跑通连续 `scaffold`。两套脚本都强制真实 API，余额、网络或密钥异常时直接失败，不使用离线结果冒充通过。
 
 使用真实 API 验证物理路线、Skill 切换和掌握度证据：
 
@@ -73,7 +77,7 @@ python scripts/online_physics_route_acceptance.py
 
 访问 `http://localhost:8501`。四页应用分别为：
 
-1. **实时教学**：现场推荐先选择“牛顿第一定律”，再选择“导数极限定义”；二分查找保留在 Skill Library 和评估集，不作为默认演示入口。填写课程、主题、目标和学生基础后开始开放问答；知识点状态、历史和 Skill 限制收在“高级设置”。不想手动打字时，展开“AI 推荐演示回答”，由真实 LLM 根据当前问题生成三条回答，选择并确认后才提交；
+1. **实时教学**：现场推荐先选择“牛顿第一定律”，再选择“导数极限定义”；两个预设自动使用对应内容 Skill 和单个完整知识目标，保证演示上下文稳定。二分查找保留在 Skill Library 和评估集，不作为默认演示入口。填写课程、主题、目标和学生基础后开始开放问答；知识点状态、历史和 Skill 限制收在“高级设置”。不想手动打字时，展开“AI 推荐演示回答”，由真实 LLM 根据当前问题生成三条回答，选择并确认后才提交；
 2. **Skill Library**：查看、筛选、安全导入和导出 Teaching Skill；内置 Skill 只读，用户 Skill 可归档、恢复和移入回收站；
 3. **过程回放**：复核 Skill 切换、状态轨迹和终止依据；
 4. **Agent 评估**：快速运行 54 个方法单元，或完整运行 810 个方法单元，并导出 JSON、CSV、Markdown 和盲评材料。

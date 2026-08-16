@@ -1134,6 +1134,7 @@ class HybridTeachingAgent:
         output: AdaptiveTurnOutput
         legacy_assessment: StateAssessment | None = None
         used_fallback = False
+        fallback_error = ""
         if self.llm.available:
             try:
                 raw_output = self.llm.structured(
@@ -1148,8 +1149,9 @@ class HybridTeachingAgent:
                 if "reply" not in raw_output and "mastery_updates" in raw_output:
                     legacy_assessment = StateAssessment.model_validate(raw_output)
                 output = AdaptiveTurnOutput.model_validate(raw_output)
-            except (LLMUnavailableError, ValueError, TypeError):
+            except (LLMUnavailableError, ValueError, TypeError) as exc:
                 used_fallback = True
+                fallback_error = f"{type(exc).__name__}: {str(exc)[:240]}"
                 output = self._adaptive_offline_output(session, student_message, catalog)
         else:
             used_fallback = True
@@ -1230,6 +1232,7 @@ class HybridTeachingAgent:
                 "evidence": output.evidence,
                 "model_mastery": output.mastery,
                 "fallback": used_fallback,
+                "fallback_error": fallback_error,
             },
             phase="practice",
             skill_plan=strategy_plan,

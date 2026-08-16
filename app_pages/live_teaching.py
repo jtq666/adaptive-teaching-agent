@@ -39,15 +39,17 @@ PRESETS = {
         "course": "高等数学",
         "topic": "导数的极限定义",
         "objective": "从平均变化率理解瞬时变化率，并解释极限如何定义导数",
-        "points": "平均变化率,极限思想,瞬时变化率",
+        "points": "导数的极限定义",
         "prior": "函数,斜率,平均变化率,平均速度",
+        "skill_id": "derivative_intro_via_slope_limit_v1",
     },
     "牛顿第一定律": {
         "course": "大学物理",
         "topic": "牛顿第一定律",
         "objective": "用公交车急刹车解释惯性，并区分保持运动与改变运动状态",
-        "points": "惯性,合力与运动变化",
+        "points": "惯性与运动状态变化",
         "prior": "速度,力,运动,惯性",
+        "skill_id": "newtons_first_law_via_engineering_examples_v1",
     },
 }
 # The programming example remains available for legacy sessions and the
@@ -140,6 +142,7 @@ def ensure_start_defaults(preset: dict[str, str]) -> None:
     if st.session_state.get("_preset_defaults_marker") != preset_marker:
         st.session_state.start_mastery_overrides = ""
         st.session_state.start_history = ""
+        st.session_state.start_available_skills = [preset["skill_id"]]
         st.session_state._preset_defaults_marker = preset_marker
     defaults = {
         "start_course": preset["course"],
@@ -153,6 +156,7 @@ def ensure_start_defaults(preset: dict[str, str]) -> None:
         "start_mastery_overrides": "",
         "start_history": "",
         "start_preferences": ["具体例子", "逐步提示"],
+        "start_available_skills": [preset["skill_id"]],
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -289,9 +293,16 @@ if session is None:
         points = [item.strip() for item in points_text.replace("，", ",").split(",") if item.strip()]
         missing = [label for label, value in (("教学主题", topic.strip()), ("教学目标", objective.strip()), ("知识点", points), ("学生姓名", student_name.strip())) if not value]
         if missing:
-            st.error("请补全：" + "、".join(missing), icon=":material/error:")
+                    st.error("请补全：" + "、".join(missing), icon=":material/error:")
         else:
             try:
+                preset_skill_id = preset.get("skill_id")
+                if preset_skill_id and available_skill_ids == [preset_skill_id] and (
+                    str(course).strip() != preset["course"] or topic.strip() != preset["topic"]
+                ):
+                    # A manually edited course/topic should not keep a stale
+                    # demo-only Skill restriction from the old preset.
+                    available_skill_ids = []
                 override_map = {}
                 for item in mastery_overrides.replace("，", ",").split(","):
                     if ":" in item:
