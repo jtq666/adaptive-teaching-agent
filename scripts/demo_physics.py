@@ -20,7 +20,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 from src.agent import GENERIC_SKILLS, HybridTeachingAgent
-from src.config import get_llm_settings
+from src.config import get_agent_settings, get_llm_settings
 from src.llm import OpenAICompatibleClient
 from src.models import StudentProfile, StudentState, TeachingGoal
 from src.storage import SessionStore
@@ -30,10 +30,11 @@ ANSWERS = [
     "我不确定，物体没有受到水平方向的力，为什么还会继续向前运动？",
     "我认为只要物体在运动，就一定需要一个向前的力来维持运动。",
     "现在我明白了：合力为零时，物体会保持静止或匀速直线运动；惯性是保持这种状态的性质，不是力。",
-    "公交车突然加速时，我会相对车向后仰，因为身体想保持原来的静止状态，而车向前加速。",
-    "公交车向右转弯时，我会相对车向左偏，因为身体想保持原来向前的直线运动状态。",
-    "电梯突然向上加速时，我会感觉被压向地板，因为身体想保持原来的静止状态。",
-    "不会。电梯匀速上升时合力为零，身体保持匀速运动，不会因为加速而有额外的压迫感。",
+    "公交车原来停着，突然向前加速时，我会相对车向后仰，因为身体想保持原来的静止状态，而车向前加速。",
+    "公交车匀速向前行驶时突然向右转弯，我会相对车向左偏，因为身体想保持原来向前的直线运动状态。",
+    "电梯原来静止，突然向上加速时，地板对我的支持力增大，我会感觉被压向地板；身体原来想保持静止。",
+    "电梯匀速上升时合力为零，身体保持匀速运动，不会因为匀速上升而有额外的压迫感。",
+    "汽车突然向左转弯时，我会相对车向右偏，因为身体想保持转弯前的直线运动状态。",
 ]
 
 
@@ -57,7 +58,13 @@ def main() -> None:
     )
 
     with TemporaryDirectory(prefix="demo-physics-") as directory:
-        agent = HybridTeachingAgent(llm=client, store=SessionStore(Path(directory)))
+        settings = get_agent_settings()
+        settings["max_rounds"] = 10
+        agent = HybridTeachingAgent(
+            llm=client,
+            store=SessionStore(Path(directory)),
+            settings=settings,
+        )
         session = agent.start_session(
             goal,
             profile,
@@ -89,7 +96,10 @@ def main() -> None:
                 "status": str(session.status),
             }
             records.append(row)
-            print(f"第{index}轮 | {turn.action_type:8} | {turn.difficulty_type:20} | {turn.teacher_message}")
+            print(
+                f"第{index}轮 | {turn.action_type:8} | {turn.difficulty_type:20} "
+                f"| 掌握度 {turn.state_after.average_mastery():.0%} | {turn.teacher_message}"
+            )
             if str(session.status) != "active":
                 break
 

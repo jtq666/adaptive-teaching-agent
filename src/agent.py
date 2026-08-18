@@ -236,19 +236,27 @@ class HybridTeachingAgent:
         previous_teacher_message = session.turns[-1].teacher_message if session.turns else ""
         current_skill = session.turns[-1].selected_skill_id if session.turns else ""
         decision, assessment = self._adaptive_turn_result(session, message, initial=False)
+        previous_turn = session.turns[-1] if session.turns else None
         active_point = (
             session.teaching_route.current_step().knowledge_point
             if session.teaching_route
             else ""
+        )
+        # A transfer action on the current decision means “ask the next
+        # transfer question”; it does not mean the student has answered it.
+        # Verification must be judged against the action delivered on the
+        # preceding teacher turn.
+        verification_skill = (
+            GENERIC_SKILLS["transfer"]
+            if previous_turn and previous_turn.action_type == "transfer"
+            else current_skill or decision.primary_skill_id
         )
         after = self.tracker.update(
             session.goal,
             session.profile,
             before,
             message,
-            GENERIC_SKILLS["transfer"]
-            if decision.action_type == "transfer"
-            else current_skill or decision.primary_skill_id,
+            verification_skill,
             round_index=session.answered_rounds() + 1,
             previous_teacher_message=previous_teacher_message,
             active_knowledge_point=active_point,
@@ -278,8 +286,9 @@ class HybridTeachingAgent:
             )
         session.rounds_in_current_run += 1
         max_rounds = int(self.settings.get("max_rounds", 8))
+        transfer_answered = bool(previous_turn and previous_turn.action_type == "transfer")
         if (
-            decision.action_type == "transfer"
+            transfer_answered
             and session.state.transfer_verified
             and self._mastery_thresholds_met(session)
         ):
@@ -755,6 +764,20 @@ class HybridTeachingAgent:
             value >= point_threshold for value in values
         )
 
+    def _transfer_ready(self, session: TeachingSession) -> bool:
+        """Allow transfer practice before the stricter completion threshold.
+
+        A learner can be ready to apply a principle in a new situation before
+        the system should declare the whole lesson complete.  Keeping these
+        thresholds separate prevents a correct answer from being followed by
+        more same-context explanation while preserving the 80% completion
+        guard used for successful termination.
+        """
+
+        point_threshold = float(self.settings.get("point_mastery_threshold", 0.70))
+        values = [session.state.mastery.get(point, 0.0) for point in session.goal.knowledge_points]
+        return bool(values) and all(value >= point_threshold for value in values)
+
     @staticmethod
     def _lowest_mastery_point(session: TeachingSession) -> str:
         points = [point for point in session.goal.knowledge_points if point in session.state.mastery]
@@ -1004,6 +1027,8 @@ class HybridTeachingAgent:
         if subject is None:
             return "diagnostic", "没有匹配的学科 Skill，先澄清当前理解。", "subject_skill_guard"
 
+        mastery_ready = self._mastery_thresholds_met(session)
+
         if not self.llm.available:
             if session.state.misconception_states and session.state.no_progress_rounds >= int(
                 self.settings.get("correction_after_rounds", 3)
@@ -1022,7 +1047,7 @@ class HybridTeachingAgent:
         ):
             return "subject", "迁移验证通过但整体掌握度尚未达标，回到最低掌握点巩固。", "mastery_guard"
 
-        if session.state.recommended_strategy == "transfer":
+        if session.state.recommended_strategy == "transfer" and mastery_ready:
             return "transfer", "模型判断当前证据适合进行迁移验证。", "model_diagnosis"
 
         difficulty = session.state.current_difficulty
@@ -1040,6 +1065,7 @@ class HybridTeachingAgent:
         if (
             route is not None
             and not session.state.transfer_verified
+            and mastery_ready
             and (
                 route.kind == "transfer"
                 or (
@@ -1073,6 +1099,35 @@ class HybridTeachingAgent:
         # best content Skill in the single adaptive call.
         return sorted(skills, key=lambda item: item.skill_id)
 
+    def _guard_adaptive_action(
+        self,
+        session: TeachingSession,
+        output: AdaptiveTurnOutput,
+        *,
+        initial: bool,
+    ) -> tuple[str, str]:
+        """Apply only hard safety boundaries to the model's action choice."""
+
+        action = output.teaching_action
+        if action == "correct" and not output.explicit_misconception:
+            if output.difficulty in {"symbol_notation", "calculation", "task_comprehension"}:
+                return "scaffold", "correction_guard: 当前回答没有明确错误概念，改为分层提示"
+            return "diagnose", "correction_guard: 当前回答没有明确错误概念，改为诊断"
+        if action == "transfer" and not self._transfer_ready(session):
+            return "explain", "transfer_guard: 当前知识点尚未达到迁移练习阈值，改为学科讲解"
+        transfer_ready = self._transfer_ready(session)
+        if output.context_changed and transfer_ready and action != "correct":
+            return "transfer", "context_transition_guard: 回复更换情境且已达到迁移练习阈值，统一进入迁移验证"
+        positive_evidence = output.evidence_level in {"correct", "explained", "transfer"}
+        if (
+            action != "correct"
+            and transfer_ready
+            and not session.state.transfer_verified
+            and (initial or positive_evidence)
+        ):
+            return "transfer", "transfer_guard: 知识点达到迁移练习阈值且已有正确证据，进入迁移验证"
+        return action, "model_action"
+
     def _adaptive_turn_result(
         self,
         session: TeachingSession,
@@ -1098,6 +1153,12 @@ class HybridTeachingAgent:
             "内容 Skill 只能从候选列表选择；教学动作只能是 explain、diagnose、scaffold、correct、transfer。"
             "correct 只有在学生自己的回答明确表达错误概念关系时使用；学生提问或表示困惑不等于误解。"
             "scaffold 只给下一小步；diagnose 只定位卡点；explain 讲清一个关系；transfer 更换情境检验同一原理。"
+            "transfer 只有在当前状态的知识点掌握度达到阈值时使用；掌握度不足时继续讲解或练习。"
+            "只有 transfer 可以更换表面情境；explain、diagnose、scaffold、correct 必须留在上一轮情境。"
+            "请返回 context_changed：只有回复要求学生在不同表面情境中应用原理时才为 true；"
+            "如果掌握度未达阈值，即使想举新例子也必须保持原情境并将 context_changed 设为 false。"
+            "如果掌握度已经达标且本轮是首轮或学生给出了正确/有依据的证据，必须进入 transfer 验证，"
+            "不要继续重复同一知识点讲解。"
             "判定示例仅用于理解字段含义：学生说‘我不明白为什么会这样’或‘物体不受力为什么还能继续运动’"
             "是疑问/困惑，不等于概念误解；学生断言‘运动必须有力维持’才是明确错误模型，应使用 correct；"
             "学生说明‘合力为零时保持匀速直线运动’是当前正确证据，不应因为历史上出现过误解就继续标为当前误解。"
@@ -1105,6 +1166,8 @@ class HybridTeachingAgent:
             "teaching_action 必须使用 explain、diagnose、scaffold 或 transfer，不能使用 correct。"
             "difficulty 只描述学生当前这一句的主要卡点：看到公式或符号关系看不懂用 symbol_notation，"
             "不知道题目要求用 task_comprehension，只有明确错误概念关系才用 concept_misconception，泛泛说‘我看不懂’且无法定位时用 unknown。"
+            "学生只提出因果疑问、表达不确定或给出待确认的候选解释，尚未形成可评价的完整推理时，优先使用 diagnose；"
+            "不要急着替学生讲完整结论。只有学生已经给出完整且基本正确的依据时，才使用 explain 或 transfer。"
             "若上一轮动作是 scaffold，学生仍说看不懂时继续降低同一任务粒度，"
             "不要跳回泛泛讲解或换成无关例子。学生若简短回答了上一轮问题，应承接原情境继续推进；"
             "只有 transfer 动作可以更换表面情境，其他动作不要擅自编造数字例子。"
@@ -1128,10 +1191,11 @@ class HybridTeachingAgent:
             '"mastery":0到1,"progress":"improved|unchanged|regressed",'
             '"affected_points":["当前回答涉及的知识点"],'
             '"evidence_level":"none|partial|correct|explained|transfer",'
-            '"verification_passed":false,"misconceptions":[],"reply":"面向学生的回复",'
+            '"verification_passed":false,"context_changed":false,"misconceptions":[],"reply":"面向学生的回复",'
             '"question":"回复中的唯一问题"}'
         )
         output: AdaptiveTurnOutput
+        raw_output: dict[str, Any] = {}
         legacy_assessment: StateAssessment | None = None
         used_fallback = False
         fallback_error = ""
@@ -1157,6 +1221,38 @@ class HybridTeachingAgent:
             used_fallback = True
             output = self._adaptive_offline_output(session, student_message, catalog)
 
+        context_retry = False
+        if (
+            output.context_changed
+            and (output.teaching_action != "transfer" or not self._transfer_ready(session))
+        ) or (
+            output.teaching_action == "transfer" and not self._transfer_ready(session)
+        ):
+            # A context transition is a contract violation when the model has
+            # not selected transfer, or when the mastery guard still blocks
+            # transfer. Repair only this exceptional response; ordinary turns
+            # continue to use one adaptive API call.
+            try:
+                repaired_raw = self.llm.structured(
+                    system_prompt
+                    + "上一版回复与教学动作的情境边界不一致。请修复：掌握度未达阈值时留在原情境，"
+                    "不要换新例子；只有掌握度达标且确实要检验迁移时，才使用 transfer 和新情境。",
+                    user_prompt
+                    + f"\n上一版结构化输出：{raw_output}\n"
+                    + f"当前是否达到迁移练习阈值：{self._transfer_ready(session)}",
+                    schema_hint,
+                    temperature=float(self.settings.get("temperature", 0.2)),
+                )
+                output = AdaptiveTurnOutput.model_validate(repaired_raw)
+                context_retry = True
+            except (LLMUnavailableError, ValueError, TypeError) as exc:
+                fallback_error = f"context_consistency_retry: {type(exc).__name__}: {str(exc)[:180]}"
+            if output.context_changed and not self._transfer_ready(session):
+                output = self._adaptive_offline_output(session, student_message, catalog)
+                used_fallback = True
+                fallback_error = fallback_error or "context_consistency_guard: 掌握度未达标，回到原情境"
+
+        action, action_guard = self._guard_adaptive_action(session, output, initial=initial)
         selected = next(
             (skill for skill in catalog if skill.skill_id == output.content_skill),
             None,
@@ -1184,12 +1280,11 @@ class HybridTeachingAgent:
             response_mode="open",
             input_hint="请用自己的话回答",
         )
-        action = output.teaching_action
         strategy_plan = SkillPlan(
             content_skill_id=selected.skill_id,
             strategy_skill_id=adaptive_skill.skill_id,
             content_skill_reason="由单次自适应教学输出选择",
-            strategy_reason=f"模型选择动作：{action}",
+            strategy_reason=f"模型选择动作：{output.teaching_action}；最终动作：{action}",
             candidate_content_skill_ids=[skill.skill_id for skill in catalog],
             candidate_strategy_skill_ids=[adaptive_skill.skill_id],
             content_switch=bool(
@@ -1202,7 +1297,11 @@ class HybridTeachingAgent:
         decision = AgentDecision(
             primary_skill_id=selected.skill_id,
             support_skill_id=adaptive_skill.skill_id,
-            selection_reason="模型在一次自适应教学输出中同时完成内容 Skill 与教学动作选择。",
+            selection_reason=(
+                "模型在一次自适应教学输出中同时完成内容 Skill 与教学动作选择。"
+                if action_guard == "model_action"
+                else f"模型完成选择，程序应用安全边界：{action_guard}。"
+            ),
             action_type=action,
             teacher_message=reply,
             expected_signal=output.evidence or "学生能回答当前问题",
@@ -1213,7 +1312,11 @@ class HybridTeachingAgent:
             ),
             decision_mode="single_llm_adaptive_turn" if not used_fallback else "offline_fallback",
             candidate_skill_ids=[skill.skill_id for skill in catalog],
-            policy_rule="content_skill_exists_only",
+            policy_rule=(
+                "content_skill_exists_only"
+                if action_guard == "model_action"
+                else f"content_skill_exists_only;{action_guard}"
+            ),
             candidate_audit=[],
             micro_step=micro_step,
             teacher_review=TeacherReview(
@@ -1228,6 +1331,11 @@ class HybridTeachingAgent:
                 "architecture": "single_llm_adaptive_turn",
                 "content_skill": selected.skill_id,
                 "teaching_action": action,
+                "model_teaching_action": output.teaching_action,
+                "action_guard": action_guard,
+                "context_changed": output.context_changed,
+                "context_consistency_retry": context_retry,
+                "transfer_ready": self._transfer_ready(session),
                 "difficulty": output.difficulty,
                 "evidence": output.evidence,
                 "model_mastery": output.mastery,
@@ -1474,7 +1582,8 @@ class HybridTeachingAgent:
                     "内容 Skill 负责知识的准确性，策略 Skill 负责本轮教学动作；回复必须体现策略意图，但措辞和例子由你自主组织。"
                     "回复控制在60到90个汉字，最长不要超过100个汉字；只保留一个核心解释和一个自然追问，避免长篇讲解。"
                     "策略行为是硬性教学合同：分层提示只能给下一步，误解纠正只能处理已确认的错误观点，"
-                    "诊断提问只定位卡点，迁移验证必须更换情境；不要用普通讲解替代已选策略。"
+                    "诊断提问只定位卡点，迁移验证必须更换情境；非迁移动作必须保持上一轮情境，"
+                    "不要用普通讲解替代已选策略，也不要在讲解动作下偷偷换成迁移问题。"
                 )
                 user_prompt = (
                     f"课程：{session.goal.course}\n主题：{session.goal.topic}\n教学目标：{session.goal.objective}\n"

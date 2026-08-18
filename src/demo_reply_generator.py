@@ -19,11 +19,11 @@ DemoTargetSignal = Literal["auto", "diagnostic", "scaffold", "misconception", "c
 
 DEMO_TARGET_LABELS = {
     "auto": "自动生成不同类型",
-    "diagnostic": "教学诊断：定位学生卡点",
-    "scaffold": "分层提示：降低下一步难度",
-    "misconception": "误解纠正：暴露错误观点",
-    "correct": "正确理解：给出完整依据",
-    "transfer": "迁移验证：换情境应用",
+    "diagnostic": "诊断倾向：表达具体卡点",
+    "scaffold": "分层提示倾向：只回答下一步",
+    "misconception": "误解倾向：表达错误观点",
+    "correct": "正确理解倾向：给出完整依据",
+    "transfer": "迁移倾向：换情境应用",
 }
 DEMO_SIGNAL_LABELS = {
     **DEMO_TARGET_LABELS,
@@ -31,11 +31,130 @@ DEMO_SIGNAL_LABELS = {
     "partial": "部分理解",
 }
 
+TARGET_BEHAVIOR = {
+    "diagnostic": "学生明确说出自己卡在哪里，但不要直接给出完整结论。",
+    "scaffold": "学生只完成当前问题的下一小步，表现出需要进一步提示。",
+    "misconception": "学生必须表达一个明确但错误的知识观点，不能只是说‘我不会’。",
+    "correct": "学生给出与当前知识目标一致的完整、简短依据。",
+    "transfer": "学生把当前知识迁移到题目要求的新情境中，给出自己的判断和理由。",
+}
+
+# These are learner utterances that have already been accepted by the real
+# physics/calculus demo runs.  They are references for the presenter helper,
+# not rules for the teaching Agent.
+VERIFIED_DEMO_REPLIES: dict[str, dict[str, list[str]]] = {
+    "newtons_first_law_via_engineering_examples_v1": {
+        "diagnostic": [
+            "我不确定，物体没有受到水平方向的力，为什么还会继续向前运动？",
+        ],
+        "scaffold": [
+            "急刹车时我可能会向前倾，但我不太确定是因为惯性还是因为别的，我卡在怎么把保持运动和改变运动状态分开说。",
+        ],
+        "misconception": [
+            "我认为只要物体在运动，就一定需要一个向前的力来维持运动。",
+        ],
+        "correct": [
+            "现在我明白了：合力为零时，物体会保持静止或匀速直线运动；惯性是保持这种状态的性质，不是力。",
+        ],
+        "transfer": [
+            "公交车原来停着，突然向前加速时，我会相对车向后仰，因为身体想保持原来的静止状态，而车向前加速。",
+            "公交车匀速向前行驶时突然向右转弯，我会相对车向左偏，因为身体想保持原来向前的直线运动状态。",
+            "电梯原来静止，突然向上加速时，身体想保持原来的静止状态，所以会感觉被压向地板。",
+        ],
+    },
+    "derivative_intro_via_slope_limit_v1": {
+        "diagnostic": [
+            "我不确定h在几何上对应什么，也不清楚平均变化率怎样变成瞬时变化率。",
+        ],
+        "scaffold": [
+            "这个不会啊。",
+            "我看不懂。",
+        ],
+        "correct": [
+            "时间区间无限缩小，平均变化率就越来越接近某一点的瞬时变化率。",
+        ],
+    },
+    "derivative_limit_definition_v1": {
+        "diagnostic": [
+            "我不确定h在几何上对应什么，也不清楚平均变化率怎样变成瞬时变化率。",
+        ],
+        "scaffold": ["这个不会啊。", "我看不懂。"],
+        "correct": [
+            "时间区间无限缩小，平均变化率就越来越接近某一点的瞬时变化率。",
+        ],
+    },
+}
+
+
+def available_demo_targets(
+    session: TeachingSession,
+    mastery_threshold: float = 0.8,
+) -> list[DemoTargetSignal]:
+    """Return demo answer types supported by the current learning evidence.
+
+    This only filters the presenter helper.  It does not select the Agent's
+    teaching action or change the learner state.
+    """
+
+    state = session.state
+    route_step = session.teaching_route.current_step() if session.teaching_route else None
+    has_misconception = bool(
+        state.misconceptions
+        or state.misconception_states
+        or state.misconception_confirmed
+        or state.current_difficulty == "concept_misconception"
+    )
+    has_operational_difficulty = state.current_difficulty in {
+        "symbol_notation",
+        "calculation",
+        "task_comprehension",
+    }
+    has_diagnostic_need = state.phase == "diagnosis" or state.current_difficulty == "unknown"
+    has_transfer_evidence = bool(
+        state.phase == "transfer"
+        or (route_step is not None and route_step.kind == "transfer")
+        or state.average_mastery() >= mastery_threshold
+    )
+
+    allowed: list[DemoTargetSignal] = ["auto"]
+    if has_diagnostic_need:
+        allowed.append("diagnostic")
+    if state.phase in {"instruction", "repair"} or has_operational_difficulty or state.no_progress_rounds > 0:
+        allowed.append("scaffold")
+    if has_misconception or state.phase == "repair":
+        allowed.append("misconception")
+    allowed.append("correct")
+    if has_transfer_evidence:
+        allowed.append("transfer")
+    return allowed
+
+
+def get_verified_demo_replies(
+    session: TeachingSession,
+    target_signal: DemoTargetSignal,
+) -> list[str]:
+    """Return stable, previously verified replies for the presenter shortcut.
+
+    These replies are deliberately kept outside :class:`DemoReplyGenerator`.
+    The AI recommendation panel must contain only the current LLM response;
+    this helper powers a separate, clearly labelled rehearsal panel.
+    """
+
+    if target_signal == "auto":
+        return []
+    current = session.turns[-1]
+    skill_id = current.content_skill_id or (
+        current.skill_plan.content_skill_id if current.skill_plan else ""
+    )
+    return list(VERIFIED_DEMO_REPLIES.get(skill_id, {}).get(target_signal, []))
+
 
 class DemoReplySuggestion(BaseModel):
     """One selectable learner reply; the signal is for the presenter only."""
 
-    suggestion_id: str = Field(min_length=1, max_length=12)
+    # 这是模型返回的内部标识，不展示给学生；允许带有目标类型前缀，
+    # 例如 misconception_1，避免无意义的格式错误阻断演示回答。
+    suggestion_id: str = Field(min_length=1, max_length=40)
     label: str = Field(min_length=1, max_length=30)
     reply: str = Field(min_length=1, max_length=240)
     intended_signal: Literal[
@@ -64,7 +183,7 @@ class DemoReplySet(BaseModel):
 
 
 class DemoReplyGenerator:
-    """Generate context-grounded demonstration replies with one LLM call."""
+    """Generate context-grounded demonstration replies for live demos."""
 
     def __init__(self, llm: OpenAICompatibleClient):
         self.llm = llm
@@ -73,6 +192,7 @@ class DemoReplyGenerator:
         self,
         session: TeachingSession,
         target_signal: DemoTargetSignal = "auto",
+        _strict_retry: bool = False,
     ) -> list[DemoReplySuggestion]:
         if not self.llm.available:
             raise LLMUnavailableError("未配置 LLM_API_KEY，无法生成 AI 推荐回答")
@@ -95,12 +215,16 @@ class DemoReplyGenerator:
         )
         target_instruction = (
             "三条回答分别覆盖：表达困惑、部分理解、正确或有依据的理解；"
-            "如果当前问题适合暴露典型误解，可以用一条自然的错误理解替代‘表达困惑’。"
+            "每条回答的 intended_signal 必须准确标注它实际表现的学生回答类型。"
             if target_signal == "auto"
             else (
-                f"本次演示目标是“{DEMO_TARGET_LABELS[target_signal]}”。"
-                "三条回答都要围绕当前教师问题，用真实学生口吻自然地表现这个目标，"
-                "不要直接说‘我要触发某个教学动作’，也不要改变当前知识点。"
+                f"三条回答的目标类型必须全部是 {target_signal}，不能混入其他类型。"
+                f"目标行为要求：{TARGET_BEHAVIOR[target_signal]}"
+                + (
+                    "这是一次严格重试，上一版混入了其他类型；请只返回目标类型的三条回答。"
+                    if _strict_retry
+                    else ""
+                )
             )
         )
         data = self.llm.structured(
@@ -114,11 +238,12 @@ class DemoReplyGenerator:
             ),
             (
                 f"课程与目标：{session.goal.model_dump_json()}\n"
-                f"当前路线步骤：{route_step}\n"
-                f"当前单步教学上下文：{current_step}\n"
-                f"当前教师话语：{current.teacher_message}\n"
-                f"最近对话：{history}\n"
-                "请只返回 suggestions 数组，每项包含 suggestion_id、label、reply、intended_signal。"
+                    f"当前路线步骤：{route_step}\n"
+                    f"当前单步教学上下文：{current_step}\n"
+                    f"当前教师话语：{current.teacher_message}\n"
+                    f"最近对话：{history}\n"
+                    "请只返回 suggestions 数组；suggestion_id 使用简短且互不重复的字符串，"
+                    "每项包含 suggestion_id、label、reply、intended_signal。"
             ),
             (
                 '{"suggestions":[{"suggestion_id":"demo_1",'
@@ -134,10 +259,25 @@ class DemoReplyGenerator:
                 '"reply":"用学生口吻生成第三条当前情境回答",'
                 '"intended_signal":"diagnostic|scaffold|misconception|correct|transfer|confused|partial"}]}'
             ),
-            temperature=0.35,
+            temperature=0.25,
         )
         result = DemoReplySet.model_validate(data)
-        return self._deduplicate(result.suggestions)
+        suggestions = self._deduplicate(result.suggestions)
+        if target_signal == "auto":
+            return suggestions
+        mismatches = [
+            item.intended_signal
+            for item in suggestions
+            if item.intended_signal != target_signal
+        ]
+        if mismatches:
+            if not _strict_retry:
+                return self.generate(session, target_signal, _strict_retry=True)
+            raise ValueError(
+                f"模型未能生成三条“{DEMO_TARGET_LABELS[target_signal]}”回答，"
+                "请点击重新生成"
+            )
+        return suggestions
 
     @staticmethod
     def _deduplicate(items: list[DemoReplySuggestion]) -> list[DemoReplySuggestion]:

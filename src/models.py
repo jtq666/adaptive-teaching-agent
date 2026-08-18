@@ -411,6 +411,7 @@ class AdaptiveTurnOutput(BaseModel):
     affected_points: list[str] = Field(default_factory=list)
     evidence_level: Literal["none", "partial", "correct", "explained", "transfer"] = "none"
     verification_passed: bool = False
+    context_changed: bool = False
     misconceptions: list[Misconception] = Field(default_factory=list)
     reply: str = ""
     question: str = ""

@@ -20,7 +20,14 @@ output/sessions/.trash/
 .streamlit/secrets.toml
 archive/
 release/
+ppt_unpacked*/
 
 # 本地面试材料，不上传 GitHub
 项目口头汇报文档.md
 面试题文档.md
+项目口头汇报演示.pptx
+项目口头汇报演示.pdf
+项目口头汇报演示预览.png
+项目口头汇报演示PPT预览.png
+~$*
+最终面试流程与实操稿.md

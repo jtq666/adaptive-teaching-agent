@@ -1,193 +1,265 @@
-# 基于 Teaching Skill Library 的自适应教学 Agent
+# Adaptive Teaching Agent
 
-> 当前实时教学采用“单次自适应教学输出”：一次真实 LLM 调用同时返回内容 Skill、教学动作、困难判断、证据、掌握度和教师回复。程序只校验内容 Skill 存在、保存状态并展示结果；旧多角色链路仅用于历史会话和评估兼容。
+基于 Teaching Skill Library 的自适应教学 Agent，服务于华东师范大学夏令营综合考察题（二）。
 
-## V6 模型优先改造说明
+项目的核心不是“回答一道题”，而是：
 
-- 快速演示运行 18 案例 × 3 方法；完整评估进一步组合 3 种学生模拟画像和 5 个共享种子，共 810 个方法单元。
-- 6 个原案例为开发集，12 个单独冻结的新情境案例为留出集；模拟器不读取方法名、可接受 Skill 或预期切换标签。
-- 自动教学行为分是独立规则 proxy，人工盲评默认明确标记为“待完成”；项目不声称真实课堂因果效果。
-- 会话 schema 升级到 v6，掌握度模型升级到 `evidence-v2`；会话保存 `TeachingRoute`，每轮记录内容 Skill、统一自适应教学 Skill、五种教学动作、阶段和调用审计；旧会话读取时自动补齐新字段。
-- 掌握度是可观察证据指数：`partial=0.50 / correct=0.68 / explained=0.82 / transfer=0.92` 向目标收敛，而不是固定加分或真实能力概率。
-- 评估明确拆成策略仿真、真实模型稳定性、人工盲评三种证据等级；没有真实双人标注时不生成教学质量分数。
-- 会话支持展示名称、复制、归档、导出和可恢复删除；历史教学目标与状态证据默认不可原地篡改。
-- 历史列表使用轻量索引、每页 20 条和选中后懒加载。测试使用隔离目录，不再污染正式档案。
+> 学生回答 → Agent 判断学习状态 → 选择下一步教法 → 生成教师回复 → 保存证据并继续教学。
 
-严格复现依赖可执行 `pip install -r requirements-lock.txt`；覆盖率验收执行 `pytest --cov=src --cov-report=term-missing --cov-fail-under=85 -q`。提交前先运行 `python scripts/quality_gate.py` 核对案例、覆盖率门槛和最新评估，再运行 `powershell -ExecutionPolicy Bypass -File scripts/prepare_submission.ps1` 完成质量审计，最后运行 `powershell -ExecutionPolicy Bypass -File scripts/build_submission.ps1` 生成白名单式交付包。自动化测试只作为核心回归，不设固定数量门槛；85% 只是基础健康线，不是题目要求。打包脚本不会删除历史数据，只复制源码、运行数据、一个演示会话和最新一套 810 单元完整评估，并拒绝 `.env`、缓存和密钥文件。
+系统使用真实 OpenAI-compatible LLM 完成自然语言理解和教师回复生成，使用确定性程序规则负责 Skill 合法性、状态范围、会话持久化和终止边界。
 
-华东师范大学夏令营综合考察题（二）的完整实现。系统根据教学目标、学生画像、当前掌握状态和历史对话，逐轮选择或切换 Teaching Skill；具体怎么解释、举例和追问由真实 LLM 自主完成。
+## 项目亮点
 
-## 已实现能力
+- **实时自适应教学**：根据学生回答识别困惑、概念误解、符号困难等情况，再选择讲解、诊断、分层提示、误解纠正或迁移验证。
+- **内容与教法分离**：内容 Skill 负责“教什么”，教学动作负责“怎么教”，同一套 Agent 框架可以复用到物理、高等数学和程序设计。
+- **证据化学习状态**：保存知识点掌握度、理解信号、误解、证据等级、下一关注点和逐轮状态快照。
+- **可解释和可回放**：每轮记录内容 Skill、教学动作、学生证据、状态变化、调用审计和终止依据。
+- **公平评估**：使用 18 个案例、3 种教学方法、共享学生初始条件和随机种子，比较自适应 Agent、固定方法和无 Skill 通用教师。
+- **数据安全**：`.env`、缓存、运行时会话和批量评估输出默认不提交到 GitHub。
 
-- 显式维护知识掌握、误解、当前理解信号和下一关注点；
-- 掌握度采用通用证据模型：LLM 对实际涉及的知识点标注 `partial / correct / explained / transfer`，再结合置信度和重复证据衰减更新；不信任模型随意返回的绝对分数，也不会更新未被回答涉及的知识点；
-- 掌握度是可解释的证据估计分，不冒充真实概率；当前更新对有效解释证据更敏感，但仍保留 0–1 边界和 0.8 终止阈值。LLM 未明确映射知识点时只记录不确定证据，不猜测更新第一个知识点；
-- 教师回复由真实 LLM 根据当前 Skill、状态和历史对话自主组织；系统保存原始回复与教学记录，不用固定话术替代模型；
-- 新会话采用开放回答基础版，保证“真实回答 → 状态更新 → Skill 调整 → 下一轮模型教学”主闭环稳定、易演示；旧会话中的单选、填空和数值题数据仍可读取与回放，但不作为当前现场演示入口；
-- 会话开始时先生成 `TeachingRoute`：每个用户提供的知识点对应一个稳定课程步骤，正确证据允许进入下一步骤，最终成功仍额外要求解释性证据和独立迁移验证；
-- 实时回合由一个模型同时返回内容 Skill 和教学动作；内容 Skill 与教学动作分开显示，但不再由多个策略 Skill 互相抢决策权。统一自适应教学 Skill 的动作只有 `explain / diagnose / scaffold / correct / transfer`。
-- 每轮展示内容 Skill、教学动作和简短证据；程序只校验返回的内容 Skill 合法，教学表达不由固定模板接管；
-- 模型根据学生原话判断是讲解、诊断、分层提示、误解纠正还是迁移验证；程序不根据关键词、连续失败次数或轮数强行切换动作。
-- 达到掌握阈值且回答上一轮真实迁移题后成功终止；第三次停滞先执行纠错，学生回答纠错后仍无改善或达到八轮时暂停；
-- 教学会话完整保存为 JSON，可在界面中回放；
-- 会话档案支持搜索分页、导入导出、继续教学、展示名、复制、归档和回收站恢复；
-- 18 个案例（6 个开发案例 + 12 个独立冻结留出案例）与 2 个基线方法的可复现量化评估；
-- 评估报告自动归档，支持历史筛选、JSON 导入、全格式导出、成组归档和回收站恢复。
-- 真实 LLM 在实时教学中负责语义诊断、内容 Skill 选择、教学动作选择和回复生成；程序只保留内容 Skill 合法性、状态保存和最大轮次终止边界。每个实时回合只进行一次模型决策调用。
-- 实时教学默认使用单次自适应教学模式；无 API 时才进入离线兼容回退，真实 API 验收不会接受离线结果。
+## 运行环境
 
-## 快速开始
+- Python 3.11 或 3.12
+- Streamlit 1.59+
+- OpenAI-compatible API（OpenAI、DeepSeek 或其他兼容服务）
+- Windows PowerShell、macOS/Linux shell 均可运行
+
+## 快速启动
+
+在项目根目录执行：
 
 ```powershell
-cd D:\桌面\华师智能教育考核\考核2
-python -m pip install -r requirements.txt
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-lock.txt
 Copy-Item .env.example .env
-# 编辑 .env，填入 OpenAI-compatible API；正式演示默认走真实模型
-streamlit run streamlit_app.py
 ```
 
-正式答辩优先使用真实 API，侧栏应显示“LLM 已连接”；只有网络故障排查或自动化回归才设置 `TEACHING_AGENT_OFFLINE=1`。真实浏览器验收可在服务启动后运行：
+然后编辑 `.env`，至少填写：
 
-```powershell
-python -m pip install -r requirements-e2e.txt
-playwright install chromium
-python scripts/browser_acceptance.py
-python scripts/online_multicase_acceptance.py --trials 2 --retries 2
+```dotenv
+LLM_API_KEY=你的_API_密钥
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o-mini
+TEACHING_AGENT_OFFLINE=0
 ```
 
-使用真实 API 验证状态语义、Skill 回切和 AI 推荐演示回答（数据只写入临时目录）：
+启动应用：
 
 ```powershell
-python scripts/online_semantic_acceptance.py
-python scripts/online_physics_route_acceptance.py
-python scripts/online_demo_reply_acceptance.py
-python scripts/online_fast_live_acceptance.py
-python scripts/online_adaptive_teaching_acceptance.py
+python -m streamlit run streamlit_app.py
+```
+
+浏览器打开：<http://localhost:8501>
+
+侧栏显示“LLM 已连接”后，再进行真实模型教学演示。API 不可用时可以设置 `TEACHING_AGENT_OFFLINE=1` 做本地排障，但离线回退不能冒充真实 API 验收结果。
+
+## 三个主要页面
+
+### 1. 实时教学
+
+建议用“牛顿第一定律”或“导数极限定义”开始：
+
+1. 选择课程和教学主题；
+2. 设置学生基础水平和初始掌握度；
+3. 开始开放回答；
+4. 输入学生真实回答；
+5. 观察 Agent 的教学动作、内容 Skill、状态证据和下一步问题；
+6. 必要时进入教师/答辩视图查看详细决策证据。
+
+现场推荐演示的路径是：
+
+```text
+学生困惑 → 继续诊断 → 暴露概念误解 → 误解纠正 → 新情境迁移验证
+```
+
+### 2. Skill Library
+
+用于查看和管理教学 Skill：
+
+- 查看内置学科 Skill；
+- 查看统一自适应教学 Skill；
+- 导入经过校验的自定义 Skill；
+- 导出、归档、恢复和回收站管理。
+
+内置 Skill 默认只读，用户导入 Skill 不会静默覆盖已有版本。
+
+### 3. 过程回放
+
+选择已经保存的会话，可以查看：
+
+- 学生每轮原话；
+- 教师每轮回复；
+- 内容 Skill 和教学动作；
+- 状态更新和学习证据；
+- Skill/教学动作变化；
+- 成功、暂停或无法继续的原因。
+
+## Agent 的工作方式
+
+实时模式优先使用一次结构化 LLM 调用，返回：
+
+- 内容 Skill；
+- 教学动作；
+- 学生困难类型；
+- 学习证据和证据等级；
+- 涉及的知识点；
+- 掌握度建议；
+- 下一关注点；
+- 教师回复和下一道问题。
+
+程序随后检查：
+
+- 内容 Skill 是否存在并且允许使用；
+- 掌握度是否在 0～1 范围内；
+- 证据是否映射到真实涉及的知识点；
+- 是否满足路线推进和终止条件；
+- API 异常或非法 JSON 是否需要回退。
+
+掌握度是“可观察学习证据指数”，不是学生真实能力的绝对概率。证据大致分为：
+
+```text
+partial   部分理解
+correct   正确应用
+explained 能够解释
+transfer  能够迁移
+```
+
+一次答对不会自动代表完全掌握；成功终止还需要充分证据和独立迁移验证。
+
+## Agent 评估
+
+评估页面评估的是 Agent 的整体教学能力，而不是只评估学生状态。核心看四件事：
+
+| 关注点 | 要回答的问题 |
+|---|---|
+| 状态判断 | Agent 看懂学生了吗？有没有识别误解？ |
+| 教学决策 | Agent 选的下一步教法合适吗？ |
+| 教学行为 | 回复准确、清楚、有针对性且不直接泄露答案吗？ |
+| 教学效果 | 学生前后有没有提升，能否迁移到新情境？ |
+
+### 三种对比方法
+
+1. **自适应 Agent**：根据学生状态调整教学动作；
+2. **固定单 Skill Agent**：固定使用一种教学方式；
+3. **无 Skill 通用 Agent**：使用同一模型进行普通教师式教学，但不使用 Skill Library。
+
+三种方法共享相同的案例、学生初始状态、回答条件、迁移题、轮次预算和随机条件，保证比较公平。
+
+### 案例和评估单元
+
+- 18 个案例：6 个开发案例 + 12 个留出案例；
+- 快速评估：18 个案例 × 3 种方法 = 54 个评估单元；
+- 完整评估：18 × 3 种方法 × 3 组学生画像 × 5 个种子 = 810 个评估单元。
+
+“评估单元”就是一组独立的“案例 + 方法 + 学生条件”实验。
+
+### 离线评估和真实 API 验收
+
+批量评估默认使用可复现的模拟学生，原因是：
+
+- 相同条件下可以公平比较三种方法；
+- 不受模型随机回复、网络和 API 延迟影响；
+- 可以快速重复大量实验；
+- 结果能够复查和回归测试。
+
+离线评估可以检查状态判断、教学决策、状态变化、迁移结果和终止逻辑，但不能直接证明真实课堂效果。真实 API 验收单独检查模型在线调用、上下文连续、输出格式、回退和响应稳定性。人工盲评则用于评价教师回复质量；未完成真实双人标注时，项目不会生成虚构的人工分数。
+
+## 评估命令
+
+快速评估或完整评估：
+
+```powershell
+python scripts/run_evaluation.py --mode quick
+python scripts/run_evaluation.py --mode full
+```
+
+真实 API 演示脚本：
+
+```powershell
 python scripts/demo_physics.py
 python scripts/demo_derivative.py
 ```
 
-答辩现场直接按 `scripts/demo_physics.py` 和 `scripts/demo_derivative.py` 的输入顺序操作。物理脚本会跑通 `correct → transfer → success`；导数脚本会跑通连续 `scaffold`。两套脚本都强制真实 API，余额、网络或密钥异常时直接失败，不使用离线结果冒充通过。
-
-使用真实 API 验证物理路线、Skill 切换和掌握度证据：
+真实 API 多轮验收：
 
 ```powershell
 python scripts/online_physics_route_acceptance.py
+python scripts/online_multicase_acceptance.py --trials 2 --retries 2
+python scripts/online_fast_live_acceptance.py
 ```
 
-访问 `http://localhost:8501`。四页应用分别为：
+## 测试和质量检查
 
-1. **实时教学**：现场推荐先选择“牛顿第一定律”，再选择“导数极限定义”；两个预设自动使用对应内容 Skill 和单个完整知识目标，保证演示上下文稳定。二分查找保留在 Skill Library 和评估集，不作为默认演示入口。填写课程、主题、目标和学生基础后开始开放问答；知识点状态、历史和 Skill 限制收在“高级设置”。不想手动打字时，展开“AI 推荐演示回答”，由真实 LLM 根据当前问题生成三条回答，选择并确认后才提交；
-2. **Skill Library**：查看、筛选、安全导入和导出 Teaching Skill；内置 Skill 只读，用户 Skill 可归档、恢复和移入回收站；
-3. **过程回放**：复核 Skill 切换、状态轨迹和终止依据；
-4. **Agent 评估**：快速运行 54 个方法单元，或完整运行 810 个方法单元，并导出 JSON、CSV、Markdown 和盲评材料。
-
-实时教学页默认使用轻量模式：仍调用真实 LLM，普通回答轮优先控制在 2 次调用；模型自主组织教师回复，程序记录状态、Skill 和掌握度证据。完整评估仍保留完整语义复核链。
-
-会话是可继续更新的教学记录，提供完整 CRUD；评估报告作为不可变实验档案，不允许原地篡改指标，但支持创建/导入、读取、导出、成组归档和可恢复删除。Skill Library 是版本化教学资产；界面允许经过校验的 YAML 导入和单项导出，但禁止静默覆盖已有 Skill。
-
-单独运行评估：
-
-```powershell
-python scripts/run_evaluation.py --mode full
-```
-
-运行测试：
+运行自动化测试：
 
 ```powershell
 python -m pytest -q
 ```
 
-## 系统架构
+覆盖率检查：
 
-实时教学对外只有一个 `HybridTeachingAgent` 和一份统一的 `TeachingSession`。一次模型调用直接完成“理解学生 → 选择内容 Skill → 选择教学动作 → 生成回复”；程序只做内容 Skill 合法性检查、状态写入和终止边界控制。
-
-```text
-新建会话：教学目标 → 本地生成稳定路线 → 持久化 TeachingRoute
-   ↓
-学生回答
-   ↓
-一次自适应教学调用 ──→ 内容 Skill + 教学动作 + 困难 + 证据 + 回复
-   ↓
-统一 Teaching Agent ──→ 校验内容 Skill / 保存状态 / 展示回复
+```powershell
+python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=85 -q
 ```
 
-每轮 `generation_audit` 保存 `single_llm_adaptive_turn` 架构标识、模型动作和调用次数，便于回放与答辩核验。评估 Agent 与实时教学链路隔离，不参与学生状态更新或教学回复生成。
+质量门禁：
 
-核心公开接口：
-
-```python
-agent = HybridTeachingAgent()
-session = agent.start_session(
-    goal, profile, initial_state,
-    history=None,
-    available_skill_ids=None,
-)
-session = agent.handle_student_message(session, "学生的真实回答")
+```powershell
+python scripts/quality_gate.py
 ```
 
-`TeachingSession` 保存整条 `TeachingRoute`；`turns` 保存每轮 `state_before`、`state_after`、内容 Skill、教学动作、困难类型、阶段和 LLM 调用审计。会话 schema 当前为 v6，旧会话读取时自动迁移；`StateEvidence` 保存学生原句、知识点、信号类型和证据等级；`KnowledgeState` 保存当前掌握度、置信度、最近证据和更新时间。
-
-## Skill Library
-
-`data/skills/` 包含学科 Skill，以及一个统一的 `adaptive_teaching_v1` 教学 Skill；旧通用 Skill 文件保留用于历史会话回放和兼容评估。用户导入版本保存到 `data/skills_custom/`，不覆盖内置文件：
-
-| 新增 Skill | 新增原因 |
-|---|---|
-| 基于证据的诊断提问 | 原 Skill 缺少回答含糊时的状态定位方法 |
-| 不直接给答案的分层提示 | 学生首次受阻时需要逐层降低难度 |
-| 对比与反例驱动的误解纠正 | 原 Skill 记录失败模式，但没有统一纠错流程 |
-| 新情境迁移与终止验证 | 为跨 Skill 成功终止提供统一证据 |
-
-实时教学新增的统一 Skill 为 `adaptive_teaching_v1`，其内部动作只有 `explain / diagnose / scaffold / correct / transfer`。旧的四个策略 YAML 仍保留在库中，目的是让历史会话和旧评估可以读取，不会进入新的实时模型决策链。每个新增 YAML 都包含 `added_reason` 和 `applicable_when`，说明新增原因与适用场景。
-
-## 配置
-
-`.env`：
-
-```dotenv
-LLM_API_KEY=
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL=gpt-4o-mini
-TEACHING_AGENT_OFFLINE=0
-TEACHING_AGENT_SESSION_DIR=
-TEACHING_AGENT_EVALUATION_DIR=
-TEACHING_AGENT_SKILL_DIR=
-TEACHING_AGENT_CUSTOM_SKILL_DIR=
-TEACHING_AGENT_CASES_PATH=
-```
-
-`config/settings.yaml` 控制最大轮数、平均/逐知识点掌握阈值、连续失败终止阈值、提示/纠错切换轮次、
-模型温度、教师回复事实复核、候选数量、评估随机种子、LLM 超时/重试、状态复核调用预算和 evidence-v2 证据目标。
-其中 `agent.simple_teaching_mode: true` 启用实时单次自适应教学；关闭后可回到兼容旧会话和评估的完整微步骤链路。
-
-LLM 未配置、超时或返回非法 JSON 时，系统自动使用规则模式继续运行；OpenAI-compatible 客户端会重试、校验结构化 JSON，并修复字符串中的非法字面反斜杠。不会因为 API 故障丢失会话；真实 API 验收会单独记录回退和重试情况。
-
-## 评估方法
-
-开发集包含高等数学、大学物理、程序设计各 2 个案例；另一个冻结文件提供每门课程 4 个新情境，共 12 个留出案例。所有方法共享相同初始状态、模拟画像、随机种子、8 轮预算、迁移阈值和重复动作边际收益函数，对比：
-
-- 自适应混合 Agent；
-- 固定单 Skill Agent；
-- 无 Skill Library 的通用教师 Agent。
-
-指标包括逐轮状态诊断、决策质量、单步契约通过率、上下文连续率、选项有效率、LLM 回退率、调用耗时、证据映射、八维教学行为 proxy、题目级前后测、标准化学习增益、单位轮次效率和迁移正确率。画像和种子先在案例内汇总，再以 18 个案例为独立配对单位计算 cluster bootstrap 95% CI、配对置换检验、Holm 校正、McNemar 检验和配对 Hedges g。运行 `python scripts/run_evaluation.py --mode full` 可生成结果文件。
+测试默认使用隔离临时目录，不应把测试会话和评估结果写入正式 `output/`。
 
 ## 项目结构
 
 ```text
 考核2/
 ├── streamlit_app.py          # Streamlit 入口
-├── app_pages/                # 实时教学 / Skill Library / 回放 / 评估
-├── src/                      # Agent、状态、Skill、LLM、评估、存储
-├── data/skills/              # 10 个原 Skill + 4 个新增 Skill
-├── data/evaluation_cases.json
-├── data/evaluation_cases_heldout.json
-├── output/sessions/          # 会话 JSON（运行时生成）
-├── output/evaluations/       # 评估 JSON/CSV/Markdown
-├── .e2e-runtime/             # 真实 API 与前端验收证据
-├── release/                  # 当前规范提交包与 SHA-256 清单
-├── scripts/                  # 评估、验收和两个现场演示脚本
-├── tests/                    # 自动化回归
-└── config/settings.yaml
+├── app_pages/                # 实时教学、Skill Library、回放、评估
+├── src/                      # Agent、模型、状态、LLM、Skill、存储、评估
+├── data/skills/              # 内置 Teaching Skill
+├── data/evaluation_cases*.json # 开发集和留出集案例
+├── config/settings.yaml      # 轮数、阈值、模型和评估配置
+├── scripts/                  # 评估、演示、在线验收和质量检查
+├── tests/                    # 单元、集成和 Streamlit 测试
+├── requirements.txt          # 常规依赖
+├── requirements-lock.txt     # 可复现依赖
+├── .env.example              # 无密钥配置模板
+└── 考核2项目报告.pdf         # 项目报告
 ```
+
+运行时生成的会话、评估结果、缓存、覆盖率文件和 `.env` 不应上传到公开仓库。
+
+## 配置说明
+
+`.env` 中的主要配置：
+
+```dotenv
+LLM_API_KEY=
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o-mini
+TEACHING_AGENT_OFFLINE=0
+```
+
+`config/settings.yaml` 控制最大轮数、掌握阈值、连续停滞阈值、模型温度、请求超时、评估随机种子和证据目标。
+
+## 当前边界
+
+- 自动评估主要验证模拟环境中的教学决策和稳定性，不等同于真实课堂因果效果；
+- 自动行为分是回归用的 proxy，不能替代人工教师评价；
+- LLM 输出具有自然波动，真实 API 验收需要保留失败、重试和回退记录；
+- 18 个案例可以支持工程验证，但不能单独证明跨课程长期泛化；
+- 真实学生实验、双人盲评和长期学习追踪仍是后续工作。
+
+## 答辩演示建议
+
+1. 用 PPT/HTML 先讲清楚“学生回答 → 状态判断 → 教学决策 → 下一步教学”；
+2. 进入实时教学，用牛顿第一定律展示困惑、误解纠正和迁移；
+3. 打开过程回放，展示每轮证据和状态变化；
+4. 进入 Agent 评估，运行快速评估，展示三种方法和四类核心指标；
+5. 最后主动说明离线评估、真实 API 验收和人工盲评的边界。
+
+## 许可证和安全说明
+
+本项目用于课程考核、教学 Agent 研究和演示。请勿将 `.env`、API 密钥、真实学生隐私数据或运行时会话上传到公开仓库。

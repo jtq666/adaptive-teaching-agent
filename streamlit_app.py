@@ -29,13 +29,13 @@ with st.sidebar:
         st.badge("LLM 未连接", icon=":material/cloud_off:", color="orange")
         st.caption("请配置 API 后再进行真实教学。")
     st.caption("v6 · 会话与评估自动保存到本地 JSON")
-    with st.popover("答辩演示路线", icon=":material/route:", width="stretch"):
+    with st.popover("功能导航", icon=":material/route:", width="stretch"):
         st.markdown("**1　实时教学**")
-        st.caption("展示状态更新与教学策略切换")
+        st.caption("根据学生回答调整教学方式")
         st.markdown("**2　过程回放**")
-        st.caption("展示逐轮证据和可解释决策")
+        st.caption("查看逐轮回答与学习证据")
         st.markdown("**3　Agent 评估**")
-        st.caption("展示三方法对比与统计边界")
+        st.caption("比较不同教学策略的表现")
 
 navigation = st.navigation(
     [

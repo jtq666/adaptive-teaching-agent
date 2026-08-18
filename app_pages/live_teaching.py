@@ -4,9 +4,9 @@ from typing import Literal, cast
 
 import streamlit as st
 
+import src.demo_reply_generator as demo_reply_generator
 from src.agent import HybridTeachingAgent
 from src.config import get_agent_settings
-from src.demo_reply_generator import DEMO_SIGNAL_LABELS, DEMO_TARGET_LABELS, DemoReplyGenerator
 from src.llm import LLMUnavailableError
 from src.models import ConversationTurn, StudentProfile, StudentState, TeachingGoal
 from src.ui import (
@@ -19,6 +19,41 @@ from src.ui import (
     page_header,
     reset_teaching_session,
     set_notice,
+)
+
+# 推荐回答辅助器是可选功能。使用模块导入并提供标签兜底，避免某个旧会话
+# 或旧缓存缺少新增标签时，让整个实时教学页面无法打开。
+DemoReplyGenerator = demo_reply_generator.DemoReplyGenerator
+available_demo_targets = getattr(
+    demo_reply_generator,
+    "available_demo_targets",
+    lambda session, mastery_threshold=0.8: list(DEMO_TARGET_LABELS),
+)
+DEMO_TARGET_LABELS = getattr(
+    demo_reply_generator,
+    "DEMO_TARGET_LABELS",
+    {
+        "auto": "自动生成不同类型",
+        "diagnostic": "诊断倾向：表达具体卡点",
+        "scaffold": "分层提示倾向：只回答下一步",
+        "misconception": "误解倾向：表达错误观点",
+        "correct": "正确理解倾向：给出完整依据",
+        "transfer": "迁移倾向：换情境应用",
+    },
+)
+DEMO_SIGNAL_LABELS = getattr(
+    demo_reply_generator,
+    "DEMO_SIGNAL_LABELS",
+    {
+        **DEMO_TARGET_LABELS,
+        "confused": "表达困惑",
+        "partial": "部分理解",
+    },
+)
+get_verified_demo_replies = getattr(
+    demo_reply_generator,
+    "get_verified_demo_replies",
+    lambda session, target_signal: [],
 )
 
 
@@ -149,7 +184,7 @@ def ensure_start_defaults(preset: dict[str, str]) -> None:
         "start_topic": preset["topic"],
         "start_objective": preset["objective"],
         "start_points": preset["points"],
-        "start_student_name": "演示学生",
+        "start_student_name": "学生",
         "start_level": "中等",
         "start_mastery": 0.35,
         "start_prior": preset["prior"],
@@ -195,7 +230,7 @@ def skill_switch_message(previous: ConversationTurn, current: ConversationTurn) 
 
 page_header(
     "实时教学",
-    "老师根据你的回答自主组织教学，并根据状态决定下一步。",
+    "根据学生回答调整教学方式，并持续记录学习状态。",
     eyebrow="自适应教学",
     icon="forum",
 )
@@ -270,7 +305,7 @@ if session is None:
                 skill_options,
                 default=[],
                 key="start_available_skills",
-                help="限制本次会话可调用的 Skill，便于对比和答辩演示。",
+                help="限制本次会话可调用的 Skill，便于比较不同教学方式。",
             )
             history_text = st.text_area(
                 "历史对话（可选）",
@@ -280,14 +315,6 @@ if session is None:
                 help="每行一轮，使用“学生：”或“教师：”开头；历史内容只作为上下文，不会重新计入本轮轮次。",
             )
         submitted = st.form_submit_button("开始教学", type="primary", icon=":material/play_arrow:", width="stretch")
-
-    demo_notes = {
-        "牛顿第一定律": "生活情境直观，适合展示诊断、支架、纠错和迁移。",
-        "导数极限定义": "从平均变化率过渡到瞬时变化率，适合展示数学迁移。",
-    }
-    with st.container(border=True):
-        st.markdown(f"**现场演示建议 · {preset_name}**")
-        st.caption(demo_notes[preset_name])
 
     if submitted:
         points = [item.strip() for item in points_text.replace("，", ",").split(",") if item.strip()]
@@ -495,14 +522,24 @@ else:
                     st.caption(f"终止判断：{turn.stop_decision or turn.policy_rule}")
 
     if str(session.status) == "active":
-        with st.expander("AI 推荐演示回答", expanded=False, icon=":material/auto_awesome:"):
+        demo_target_ids = available_demo_targets(
+            session,
+            mastery_threshold=float(get_agent_settings().get("mastery_threshold", 0.8)),
+        )
+        with st.expander("AI 推荐回答", expanded=False, icon=":material/auto_awesome:"):
             target_signal = st.selectbox(
-                "本次希望演示的状态",
-                list(DEMO_TARGET_LABELS),
+                "本次希望生成的学生回答类型",
+                demo_target_ids,
                 format_func=lambda value: DEMO_TARGET_LABELS[value],
                 key=f"demo_target_signal_{session.session_id}_{teaching_rounds}",
             )
-            st.caption("这是给演示者的生成提示，不会强制 Agent 采用对应动作；提交后仍由模型正常判断。")
+            if target_signal == "auto":
+                st.caption("自动模式会混合生成困惑、部分理解和正确回答，方便观察不同分支。")
+            else:
+                st.caption(
+                    "本模式会生成三条同类型回答，帮助比较不同学习状态；提交后 Agent 仍会根据原话独立判断。"
+                )
+            st.caption("本区只显示本轮真实 API 生成的推荐回答；可选类型已根据当前阶段和学习证据过滤。")
             suggestion_key = (
                 f"ai_demo_replies_{session.session_id}_{teaching_rounds}_{target_signal}"
             )
@@ -518,7 +555,15 @@ else:
                             target_signal=target_signal,
                         )
                     st.session_state[suggestion_key] = [item.model_dump(mode="json") for item in suggestions]
-                    st.session_state[f"{suggestion_key}_selected"] = suggestions[0].suggestion_id
+                    preferred = next(
+                        (
+                            item
+                            for item in suggestions
+                            if target_signal == "auto" or item.intended_signal == target_signal
+                        ),
+                        suggestions[0],
+                    )
+                    st.session_state[f"{suggestion_key}_selected"] = preferred.suggestion_id
                     set_notice("已生成当前问题的 AI 推荐回答。", ":material/auto_awesome:")
                     st.rerun()
                 except LLMUnavailableError as exc:
@@ -535,13 +580,13 @@ else:
                     suggestion_ids,
                     key=f"{suggestion_key}_selected",
                     format_func=lambda item_id: (
-                        f"{DEMO_SIGNAL_LABELS.get(suggestion_map[item_id].get('intended_signal', ''), '演示回答')}"
+                        f"{DEMO_SIGNAL_LABELS.get(suggestion_map[item_id].get('intended_signal', ''), '推荐回答')}"
                         f" · {suggestion_map[item_id]['label']}"
                     ),
                 )
                 selected = suggestion_map[selected_id]
                 st.caption(
-                    "模型标注的演示意图："
+                    "来源：本轮真实 API 生成 · 类型："
                     + DEMO_SIGNAL_LABELS.get(selected.get("intended_signal", ""), "未标注")
                 )
                 st.info(selected["reply"], icon=":material/chat:")
@@ -552,6 +597,44 @@ else:
                     key=f"use_demo_reply_{session.session_id}_{teaching_rounds}",
                 ):
                     st.session_state.pending_demo_reply = selected["reply"]
+        verified_target_ids = [
+            target
+            for target in demo_target_ids
+            if target != "auto" and get_verified_demo_replies(session, target)
+        ]
+        with st.expander("已验证回答", expanded=False, icon=":material/verified:"):
+            st.caption(
+                "这些回答已按当前教学情境验证；使用后仍由 Agent 正常判断。"
+            )
+            if not verified_target_ids:
+                st.info("当前学科与阶段暂无已验证的快捷回答。", icon=":material/info:")
+            else:
+                verified_target_signal = st.selectbox(
+                    "选择回答类型",
+                    verified_target_ids,
+                    format_func=lambda value: DEMO_TARGET_LABELS[value],
+                    key=f"verified_demo_target_{session.session_id}_{teaching_rounds}",
+                )
+                verified_replies = get_verified_demo_replies(session, verified_target_signal)
+                verified_index = st.radio(
+                    "选择一条已验证回答",
+                    list(range(len(verified_replies))),
+                    key=(
+                        f"verified_demo_reply_{session.session_id}_"
+                        f"{teaching_rounds}_{verified_target_signal}"
+                    ),
+                    format_func=lambda index: f"已跑通回答 {index + 1}",
+                )
+                selected_verified_reply = verified_replies[verified_index]
+                st.caption("来源：已验证回答 · 用于快速填入当前回答。")
+                st.info(selected_verified_reply, icon=":material/verified:")
+                if st.button(
+                    "使用已验证回答",
+                    type="primary",
+                    icon=":material/send:",
+                    key=f"use_verified_demo_reply_{session.session_id}_{teaching_rounds}",
+                ):
+                    st.session_state.pending_demo_reply = selected_verified_reply
         pending_demo_reply = st.session_state.pop("pending_demo_reply", None)
         response_mode = current.micro_step.response_mode if current.micro_step else "open"
         submitted_reply = pending_demo_reply

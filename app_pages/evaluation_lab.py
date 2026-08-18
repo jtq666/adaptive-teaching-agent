@@ -39,6 +39,7 @@ DIMENSION_NAMES = {
 }
 
 
+
 @st.cache_data(max_entries=1)
 def cached_cases():
     return load_cases()
@@ -46,8 +47,8 @@ def cached_cases():
 
 page_header(
     "Agent 评估",
-    "比较自适应 Agent、固定 Skill 和无 Skill 基线，并明确区分模拟证据与真实教学效果。",
-    eyebrow="评估实验室 · 证据先于结论",
+    "用少量核心指标说明自适应 Agent 是否有效。",
+    eyebrow="策略评估 · 核心结果",
     icon="experiment",
 )
 
@@ -57,15 +58,8 @@ with st.expander("先看实验边界", expanded=False, icon=":material/science:"
         st.markdown(f"**{method}** · {description}")
     st.caption("学习变化函数不读取方法名称；结果同时报告点估计、置信区间和失败案例。")
 
-evidence_row = st.container(horizontal=True)
-with evidence_row:
-    st.badge("策略仿真 · 当前可运行", color="green", icon=":material/science:")
-    st.badge("真实模型稳定性 · 需在线脚本", color="blue", icon=":material/cloud:")
-    st.badge("人工盲评 · 导入两人标注后完成", color="orange", icon=":material/groups:")
-st.caption("当前快速/完整评估只回答策略闭环是否可复现；它不会自动升级为真实课堂效果结论。")
-
 cases = cached_cases()
-existing_report = st.session_state.evaluation_report
+existing_report = st.session_state.get("evaluation_report")
 evaluation_store = get_evaluation_store()
 
 
@@ -170,22 +164,22 @@ with st.container(horizontal=True, vertical_alignment="center"):
         else:
             st.caption("没有已归档报告")
 
-    st.caption("评估报告自动归档，可随时载入、导出或移入回收站。")
+    st.caption("历史报告、导入、导出和回收站都收在上方操作菜单中。")
 
 with st.container(border=True):
     evaluation_mode = st.segmented_control(
         "运行模式",
-        ["快速演示", "完整评估"],
-        default="快速演示",
+        ["快速评估", "完整评估"],
+        default="快速评估",
         required=True,
     )
-    design_runs = len(cases) * 3 if evaluation_mode == "快速演示" else len(cases) * 3 * 3 * 5
+    design_runs = len(cases) * 3 if evaluation_mode == "快速评估" else len(cases) * 3 * 3 * 5
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
         st.metric("测试案例", len(cases), border=True)
         st.metric("开发 / 留出", "6 / 12", border=True)
         st.metric("评估单元", design_runs, border=True)
-        run_label = "运行快速演示" if evaluation_mode == "快速演示" else "运行完整评估"
+        run_label = "运行快速评估" if evaluation_mode == "快速评估" else "运行完整评估"
         run_clicked = st.button(
             f"重新{run_label}" if existing_report else run_label,
             type="primary",
@@ -195,7 +189,7 @@ with st.container(border=True):
             st.session_state.evaluation_report = None
             set_notice("已清除页面中的评估结果，历史导出文件仍保留。", ":material/delete_sweep:")
             st.rerun()
-    st.caption(f"离线运行，不消耗 LLM API · 预计 {design_runs} 个配对方法单元。")
+    st.caption(f"离线运行，不消耗 LLM API · 本次预计 {design_runs} 个评估单元。")
 
 if run_clicked:
     with st.status(f"正在运行 {design_runs} 个可复现评估单元…", expanded=True) as status:
@@ -203,7 +197,7 @@ if run_clicked:
             st.write(f"加载 {len(get_library().skills)} 个 Teaching Skill")
             st.write(f"运行 {len(cases)} 个案例 × 3 种方法")
             st.write("计算 bootstrap、置换检验、Holm 校正、McNemar 与盲评材料")
-            generated = EvaluationRunner(get_library()).run(cases, mode="quick" if evaluation_mode == "快速演示" else "full")
+            generated = EvaluationRunner(get_library()).run(cases, mode="quick" if evaluation_mode == "快速评估" else "full")
             st.session_state.evaluation_report = generated.model_dump(mode="json")
             status.update(label="评估完成", state="complete", expanded=False)
             set_notice("评估完成，结果和盲评材料已经生成。")
@@ -212,22 +206,27 @@ if run_clicked:
             status.update(label="评估未完成", state="error", expanded=True)
             st.error(f"评估失败，已有结果未被覆盖：{exc}", icon=":material/error:")
 
-raw_report = st.session_state.evaluation_report
+raw_report = st.session_state.get("evaluation_report")
 if not raw_report:
-    st.info("运行后可查看总体差异、统计区间、八维行为代理、逐案例轨迹和盲评材料。", icon=":material/info:")
-    case_df = pd.DataFrame(
-        [
-            {
-                "案例": case.title,
-                "课程": case.goal.course,
-                "数据划分": "开发集" if case.split == "development" else "冻结留出集",
-                "前测": case.pretest_score,
-                "主要困难": case.true_misconceptions[0],
-            }
-            for case in cases
-        ]
-    )
-    st.dataframe(case_df, hide_index=True)
+    st.info("还没有评估结果。点击上方按钮运行一次快速评估。", icon=":material/info:")
+    with st.container(horizontal=True):
+        st.metric("可用案例", len(cases), border=True)
+        st.metric("比较方法", 3, border=True)
+        st.metric("默认模式", "快速评估", border=True)
+    with st.expander("查看案例列表", expanded=False):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "案例": case.title,
+                        "课程": case.goal.course,
+                        "数据集": "开发" if case.split == "development" else "留出",
+                    }
+                    for case in cases
+                ]
+            ),
+            hide_index=True,
+        )
     st.stop()
 
 report = EvaluationReport.model_validate(raw_report)
@@ -291,6 +290,53 @@ with result_bar:
             icon=":material/key:",
             width="stretch",
         )
+
+st.subheader("核心结果")
+with st.container(horizontal=True):
+    st.metric("决策质量", f"{adaptive['decision_quality']:.1%}", border=True)
+    st.metric("学习增益", f"{adaptive['normalized_gain']:.1%}", border=True)
+    st.metric("迁移正确率", f"{adaptive['transfer_accuracy']:.1%}", border=True)
+    st.metric("平均轮数", f"{adaptive['mean_rounds']:.1f}", border=True)
+
+if fixed["normalized_gain"] > adaptive["normalized_gain"]:
+    conclusion = (
+        f"本次结果中固定 Skill 的学习增益更高，但自适应 Agent 的决策质量为 "
+        f"{adaptive['decision_quality']:.1%}；决策质量与学习增益反映不同侧面。"
+    )
+else:
+    conclusion = (
+        f"本次结果中自适应 Agent 的学习增益比固定 Skill 高 "
+        f"{adaptive['normalized_gain'] - fixed['normalized_gain']:.1%}，"
+        "同时观察决策质量和迁移正确率。"
+    )
+st.info(conclusion, icon=":material/lightbulb:")
+
+with st.expander("方法对比表", expanded=False, icon=":material/table:"):
+    st.dataframe(
+        summary_df[["method", "decision_quality", "normalized_gain", "transfer_accuracy", "mean_rounds"]]
+        .rename(
+            columns={
+                "method": "方法",
+                "decision_quality": "决策质量",
+                "normalized_gain": "学习增益",
+                "transfer_accuracy": "迁移正确率",
+                "mean_rounds": "平均轮数",
+            }
+        ),
+        hide_index=True,
+        column_config={
+            column: st.column_config.NumberColumn(format="percent")
+            for column in ["决策质量", "学习增益", "迁移正确率"]
+        },
+    )
+
+show_details = st.checkbox(
+    "展开详细评估（统计检验、盲评、逐案例）",
+    value=False,
+    key="show_evaluation_details",
+)
+if not show_details:
+    st.stop()
 
 view = st.segmented_control(
     "查看评估内容",
